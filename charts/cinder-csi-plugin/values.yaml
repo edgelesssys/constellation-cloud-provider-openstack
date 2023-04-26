@@ -54,17 +54,10 @@ csi:
     extraArgs: {}
   plugin:
     image:
-      repository: registry.k8s.io/provider-os/cinder-csi-plugin
+      repository: ghcr.io/edgelesssys/constellation/cinder-csi-plugin
       pullPolicy: IfNotPresent
-      tag:  # defaults to .Chart.AppVersion
-    volumes:
-      - name: cacert
-        hostPath:
-          path: /etc/cacert
+      tag: # defaults to .Chart.AppVersion
     volumeMounts:
-      - name: cacert
-        mountPath: /etc/cacert
-        readOnly: true
       - name: cloud-config
         mountPath: /etc/kubernetes
         readOnly: true
@@ -92,6 +85,10 @@ csi:
       tolerations: []
     resources: {}
     extraArgs: {}
+  kms:
+    keyServiceName: "key-service"
+    keyServicePort: 9000
+    keyServiceNamespace: "kube-system"
 
 # Log verbosity level.
 # See https://github.com/kubernetes/community/blob/master/contributors/devel/sig-instrumentation/logging.md
@@ -99,47 +96,19 @@ csi:
 logVerbosityLevel: 2
 
 secret:
-  enabled: false
+  enabled: true
   create: false
-  filename: cloud.conf
-#  name: cinder-csi-cloud-config
-#  data:
-#    cloud.conf: |-
-#      [Global]
-#      auth-url=http://openstack-control-plane
-#      user-id=user-id
-#      password=password
-#      trust-id=trust-id
-#      region=RegionOne
-#      ca-file=/etc/cacert/ca-bundle.crt
+  filename: cloudprovider.conf
+  name: cinder-csi-cloud-config
 
 storageClass:
   enabled: true
-  delete:
-    isDefault: false
+  default:
+    isDefault: true
     allowVolumeExpansion: true
-  retain:
+  integrity:
     isDefault: false
-    allowVolumeExpansion: true
-# any kind of custom StorageClasses
-#   custom: |-
-#     ---
-#     apiVersion: storage.k8s.io/v1
-#     kind: StorageClass
-#     metadata:
-#       name: sas
-#     provisioner: cinder.csi.openstack.org
-#     volumeBindingMode: WaitForFirstConsumer
-#     allowVolumeExpansion: true
-#     parameters:
-#       type: SAS
-#     ---
-#     apiVersion: snapshot.storage.k8s.io/v1
-#     kind: VolumeSnapshotClass
-#     metadata:
-#       name: csi-cinder-snapclass
-#     driver: cinder.csi.openstack.org
-#     deletionPolicy: Delete
+    allowVolumeExpansion: false
 
 # You may set ID of the cluster where openstack-cinder-csi is deployed. This value will be appended
 # to volume metadata in newly provisioned volumes as `cinder.csi.openstack.org/cluster=<cluster ID>`.

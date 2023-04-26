@@ -2,24 +2,28 @@
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: csi-cinder-sc-delete
-  {{- if .Values.storageClass.delete.isDefault }}
+  name: encrypted-rwo
+  {{- if .Values.storageClass.default.isDefault }}
   annotations:
     storageclass.kubernetes.io/is-default-class: "true"
   {{- end }}
-provisioner: cinder.csi.openstack.org
+provisioner: cinder.csi.confidential.cloud
 reclaimPolicy: Delete
-allowVolumeExpansion: {{ .Values.storageClass.delete.allowVolumeExpansion }}
+allowVolumeExpansion: {{ .Values.storageClass.default.allowVolumeExpansion }}
+volumeBindingMode: Immediate
 ---
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: csi-cinder-sc-retain
-  {{- if .Values.storageClass.retain.isDefault }}
+  name: integrity-encrypted-rwo
+  {{- if .Values.storageClass.integrity.isDefault }}
   annotations:
     storageclass.kubernetes.io/is-default-class: "true"
   {{- end }}
-provisioner: cinder.csi.openstack.org
-reclaimPolicy: Retain
-allowVolumeExpansion: {{ .Values.storageClass.retain.allowVolumeExpansion }}
+parameters:
+  csi.storage.k8s.io/fstype: ext4-integrity
+provisioner: cinder.csi.confidential.cloud
+reclaimPolicy: Delete
+allowVolumeExpansion: {{ .Values.storageClass.integrity.allowVolumeExpansion }}
+volumeBindingMode: Immediate
 {{- end }}
