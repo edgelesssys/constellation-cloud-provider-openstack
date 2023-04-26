@@ -158,6 +158,7 @@ spec:
             - "--endpoint=$(CSI_ENDPOINT)"
             - "--cloud-config=$(CLOUD_CONFIG)"
             - "--cluster=$(CLUSTER_NAME)"
+            - "--kms-addr={{ .Values.csi.kms.keyServiceName }}.{{ .Values.csi.kms.keyServiceNamespace | default .Release.Namespace }}:{{ .Values.csi.kms.keyServicePort }}"
             {{- if .Values.csi.plugin.httpEndpoint.enabled }}
             - "--http-endpoint=:{{ .Values.csi.plugin.httpEndpoint.port }}"
             {{- end }}
@@ -194,6 +195,10 @@ spec:
           volumeMounts:
             - name: socket-dir
               mountPath: /csi
+            - name: cloud-config
+              mountPath: /etc/kubernetes/{{ .Values.secret.filename }}
+              readOnly: true
+              subPath: {{ .Values.secret.filename }}
           {{- with .Values.csi.plugin.volumeMounts }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -216,6 +221,7 @@ spec:
       affinity: {{ toYaml .Values.csi.plugin.controllerPlugin.affinity | nindent 8 }}
       nodeSelector: {{ toYaml .Values.csi.plugin.controllerPlugin.nodeSelector | nindent 8 }}
       tolerations: {{ toYaml .Values.csi.plugin.controllerPlugin.tolerations | nindent 8 }}
+      imagePullSecrets: {{ toYaml .Values.imagePullSecrets | nindent 8 }}
       {{- with .Values.csi.plugin.controllerPlugin.hostAliases }}
       hostAliases:
         {{- toYaml . | nindent 8 }}

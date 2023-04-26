@@ -24,7 +24,7 @@ spec:
     spec:
       serviceAccount: csi-cinder-node-sa
       hostNetwork: true
-      dnsPolicy: {{ .Values.csi.plugin.nodePlugin.dnsPolicy }}
+      dnsPolicy: ClusterFirstWithHostNet
       containers:
         - name: node-driver-registrar
           securityContext:
@@ -85,6 +85,7 @@ spec:
             - "-v={{ .Values.logVerbosityLevel }}"
             - "--endpoint=$(CSI_ENDPOINT)"
             - "--cloud-config=$(CLOUD_CONFIG)"
+            - "--kms-addr={{ .Values.csi.kms.keyServiceName }}.{{ .Values.csi.kms.keyServiceNamespace | default .Release.Namespace }}:{{ .Values.csi.kms.keyServicePort }}"
             {{- if .Values.csi.plugin.extraArgs }}
             {{- with .Values.csi.plugin.extraArgs }}
             {{- tpl . $ | trim | nindent 12 }}
@@ -117,6 +118,10 @@ spec:
             - name: pods-probe-dir
               mountPath: /dev
               mountPropagation: "HostToContainer"
+            - name: cloud-config
+              mountPath: /etc/kubernetes/{{ .Values.secret.filename }}
+              readOnly: true
+              subPath: {{ .Values.secret.filename }}
           {{- with .Values.csi.plugin.volumeMounts }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -157,6 +162,7 @@ spec:
       affinity: {{ toYaml .Values.csi.plugin.nodePlugin.affinity | nindent 8 }}
       nodeSelector: {{ toYaml .Values.csi.plugin.nodePlugin.nodeSelector | nindent 8 }}
       tolerations: {{ toYaml .Values.csi.plugin.nodePlugin.tolerations | nindent 8 }}
+      imagePullSecrets: {{ toYaml .Values.imagePullSecrets | nindent 8 }}
       {{- with .Values.csi.plugin.nodePlugin.hostAliases }}
       hostAliases:
         {{- toYaml . | nindent 8 }}

@@ -1,13 +1,5 @@
 # This YAML file contains nginx & csi cinder driver objects,
 # which are necessary to run nginx with csi cinder driver.
-
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: csi-sc-cinderplugin
-provisioner: cinder.csi.openstack.org
-
----
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -18,7 +10,7 @@ spec:
   resources:
     requests:
       storage: 1Gi
-  storageClassName: csi-sc-cinderplugin
+  storageClassName: encrypted-rwo-delete
 
 ---
 apiVersion: v1
