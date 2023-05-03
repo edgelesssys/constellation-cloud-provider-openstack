@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/edgelesssys/constellation/v2/csi/cryptmapper"
 	"github.com/gophercloud/gophercloud/openstack/blockstorage/v3/volumes"
 	"github.com/kubernetes-csi/csi-lib-utils/protosanitizer"
 	"golang.org/x/net/context"
@@ -69,7 +70,7 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	if ephemeralVolume {
 		// See https://github.com/kubernetes/cloud-provider-openstack/issues/1493
 		klog.Warningf("CSI inline ephemeral volumes support is deprecated in 1.24 release.")
-		return nodePublishEphemeral(req, ns)
+		return nodePublishEphemeral(ctx, req, ns)
 	}
 
 	// In case of ephemeral volume staging path not provided
@@ -120,12 +121,13 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	return &csi.NodePublishVolumeResponse{}, nil
 }
 
-func nodePublishEphemeral(req *csi.NodePublishVolumeRequest, ns *nodeServer) (*csi.NodePublishVolumeResponse, error) {
+func nodePublishEphemeral(ctx context.Context, req *csi.NodePublishVolumeRequest, ns *nodeServer) (*csi.NodePublishVolumeResponse, error) {
 
 	var size int
 	var err error
 
 	volID := req.GetVolumeId()
+	volumeCapability := req.GetVolumeCapability()
 	volName := fmt.Sprintf("ephemeral-%s", volID)
 	properties := map[string]string{"cinder.csi.openstack.org/cluster": ns.Driver.cluster}
 	capacity, ok := req.GetVolumeContext()["capacity"]
@@ -208,6 +210,21 @@ func nodePublishEphemeral(req *csi.NodePublishVolumeRequest, ns *nodeServer) (*c
 	if notMnt {
 		// set default fstype is ext4
 		fsType := "ext4"
+
+		if mnt := volumeCapability.GetMount(); mnt != nil {
+			if mnt.FsType != "" {
+				fsType = mnt.FsType
+			}
+		}
+
+		// [Edgeless] Map the device as a crypt device, creating a new LUKS partition if needed
+		fsType, integrity := cryptmapper.IsIntegrityFS(fsType)
+		newDevicePath, err := ns.Driver.cm.OpenCryptDevice(ctx, devicePath, evol.ID, integrity)
+		if err != nil {
+			return nil, status.Error(codes.Internal, fmt.Sprintf("NodeStageVolume failed on volume %v to %s, open crypt device failed: %v", devicePath, targetPath, err))
+		}
+		devicePath = newDevicePath
+
 		// Mount
 		err = m.Mounter().FormatAndMount(devicePath, targetPath, fsType, nil)
 		if err != nil {
@@ -228,11 +245,8 @@ func nodePublishVolumeForBlock(req *csi.NodePublishVolumeRequest, ns *nodeServer
 
 	m := ns.Mount
 
-	// Do not trust the path provided by cinder, get the real path on node
-	source, err := getDevicePath(volumeID, m)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "Unable to find Device path for volume: %v", err)
-	}
+	// Get device mapper path
+	source := filepath.Join("/dev/mapper", volumeID)
 
 	exists, err := utilpath.Exists(utilpath.CheckFollowSymlink, podVolumePath)
 	if err != nil {
@@ -320,6 +334,11 @@ func nodeUnpublishEphemeral(req *csi.NodeUnpublishVolumeRequest, ns *nodeServer,
 		return nil, status.Error(codes.FailedPrecondition, "Volume attachment not found in request")
 	}
 
+	// [Edgeless] Unmap the crypt device so we can properly remove the device from the node
+	if err := ns.Driver.cm.CloseCryptDevice(volumeID); err != nil {
+		return nil, status.Errorf(codes.Internal, "nodeUnpublishEphemeral failed to close mapped crypt device for disk %s: %v", volumeID, err)
+	}
+
 	err := ns.Cloud.DetachVolume(instanceID, volumeID)
 	if err != nil {
 		klog.V(3).Infof("Failed to DetachVolume: %v", err)
@@ -374,29 +393,41 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 		return nil, status.Errorf(codes.Internal, "Unable to find Device path for volume: %v", err)
 	}
 
-	if blk := volumeCapability.GetBlock(); blk != nil {
-		// If block volume, do nothing
-		return &csi.NodeStageVolumeResponse{}, nil
-	}
-
 	// Verify whether mounted
 	notMnt, err := m.IsLikelyNotMountPointAttach(stagingTarget)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
+	// set default fstype is ext4
+	fsType := "ext4"
+	var options []string
+	if mnt := volumeCapability.GetMount(); mnt != nil {
+		if mnt.FsType != "" {
+			fsType = mnt.FsType
+		}
+		mountFlags := mnt.GetMountFlags()
+		options = append(options, collectMountOptions(fsType, mountFlags)...)
+	}
+	// [Edgeless] Check if the volume should be integrity protected
+	fsType, integrity := cryptmapper.IsIntegrityFS(fsType)
+
+	if notMnt {
+		// [Edgeless] Map the device as a crypt device, creating a new LUKS partition if needed
+		newDevicePath, err := ns.Driver.cm.OpenCryptDevice(ctx, devicePath, volumeID, integrity)
+		if err != nil {
+			return nil, status.Error(codes.Internal, fmt.Sprintf("NodeStageVolume failed on volume %v to %s, open crypt device failed: %v", devicePath, stagingTarget, err))
+		}
+		devicePath = newDevicePath
+	}
+
+	if blk := volumeCapability.GetBlock(); blk != nil {
+		// If block volume, do nothing
+		return &csi.NodeStageVolumeResponse{}, nil
+	}
+
 	// Volume Mount
 	if notMnt {
-		// set default fstype is ext4
-		fsType := "ext4"
-		var options []string
-		if mnt := volumeCapability.GetMount(); mnt != nil {
-			if mnt.FsType != "" {
-				fsType = mnt.FsType
-			}
-			mountFlags := mnt.GetMountFlags()
-			options = append(options, collectMountOptions(fsType, mountFlags)...)
-		}
 		// Mount
 		err = m.Mounter().FormatAndMount(devicePath, stagingTarget, fsType, options)
 		if err != nil {
@@ -451,6 +482,11 @@ func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 	err = ns.Mount.UnmountPath(stagingTargetPath)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "Unmount of targetPath %s failed with error %v", stagingTargetPath, err)
+	}
+
+	// [Edgeless] Unmap the crypt device so we can properly remove the device from the node
+	if err := ns.Driver.cm.CloseCryptDevice(volumeID); err != nil {
+		return nil, status.Errorf(codes.Internal, "NodeUnstageVolume failed to close mapped crypt device for disk %s: %v", stagingTargetPath, err)
 	}
 
 	return &csi.NodeUnstageVolumeResponse{}, nil
@@ -550,23 +586,21 @@ func (ns *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
 		return nil, status.Errorf(codes.Internal, "NodeExpandVolume failed with error %v", err)
 	}
 
-	output, err := ns.Mount.GetMountFs(volumePath)
+	// [Edgeless] Resize LUKS partition
+	devicePath, err := ns.Driver.cm.GetDevicePath(volumeID)
+	devicePath, err = ns.Driver.cm.ResizeCryptDevice(ctx, volumeID)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "Failed to find mount file system %s: %v", volumePath, err)
-	}
-
-	devicePath := strings.TrimSpace(string(output))
-	if devicePath == "" {
-		return nil, status.Error(codes.Internal, "Unable to find Device path for volume")
+		return nil, status.Errorf(codes.Internal, "resizing crypt device: %v", err)
 	}
 
 	if ns.Cloud.GetBlockStorageOpts().RescanOnResize {
 		// comparing current volume size with the expected one
-		newSize := req.GetCapacityRange().GetRequiredBytes()
+		newSize := req.GetCapacityRange().GetRequiredBytes() - cryptmapper.LUKSHeaderSize // LUKS2 header is 16MiB, subtract from request size to get expected value)
 		if err := blockdevice.RescanBlockDeviceGeometry(devicePath, volumePath, newSize); err != nil {
 			return nil, status.Errorf(codes.Internal, "Could not verify %q volume size: %v", volumeID, err)
 		}
 	}
+
 	r := mountutil.NewResizeFs(ns.Mount.Mounter().Exec)
 	if _, err := r.Resize(devicePath, volumePath); err != nil {
 		return nil, status.Errorf(codes.Internal, "Could not resize volume %q: %v", volumeID, err)

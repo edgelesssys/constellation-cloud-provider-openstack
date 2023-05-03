@@ -27,6 +27,7 @@ var FakeCluster = "cluster"
 var FakeNodeID = "CSINodeID"
 var FakeEndpoint = "tcp://127.0.0.1:10000"
 var FakeConfig = "/etc/cloud.conf"
+var FakeKMS = "fake.kms:9000"
 var FakeCtx = context.Background()
 var FakeVolName = "CSIVolumeName"
 var FakeVolID = "CSIVolumeID"

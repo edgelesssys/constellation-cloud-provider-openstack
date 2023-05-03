@@ -19,6 +19,8 @@ package main
 import (
 	"os"
 
+	"github.com/edgelesssys/constellation/v2/csi/cryptmapper"
+	cryptKms "github.com/edgelesssys/constellation/v2/csi/kms"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"k8s.io/cloud-provider-openstack/pkg/csi/cinder"
@@ -36,6 +38,7 @@ var (
 	cloudConfig  []string
 	cluster      string
 	httpEndpoint string
+	kmsAddr      string
 )
 
 func main() {
@@ -64,7 +67,13 @@ func main() {
 	}
 
 	cmd.PersistentFlags().StringVar(&cluster, "cluster", "", "The identifier of the cluster that the plugin is running in.")
-	cmd.PersistentFlags().StringVar(&httpEndpoint, "http-endpoint", "", "The TCP network address where the HTTP server for providing metrics for diagnostics, will listen (example: `:8080`). The default is empty string, which means the server is disabled.")
+	cmd.PersistentFlags().StringVar(&httpEndpoint, "http-endpoint", "", "The TCP network address where the HTTP server for providing metrics for diagnostics, including metrics and leader election health check, will listen (example: `:8080`). The default is empty string, which means the server is disabled.")
+
+	cmd.PersistentFlags().StringVar(&kmsAddr, "kms-addr", "kms.kube-system:9000", "Address of Constellation's KMS. Used to request keys (default: kms.kube-system:9000)")
+	if err := cmd.MarkPersistentFlagRequired("kms-addr"); err != nil {
+		klog.Fatalf("Unable to mark flag kms-addr to be required: %v", err)
+	}
+
 	openstack.AddExtraFlags(pflag.CommandLine)
 
 	code := cli.Run(cmd)
@@ -80,12 +89,15 @@ func handle() {
 		klog.Warningf("Failed to GetOpenStackProvider: %v", err)
 		return
 	}
-	//Initialize mount
+	// Initialize mount
 	mount := mount.GetMountProvider()
 
-	//Initialize Metadata
+	// Initialize Metadata
 	metadata := metadata.GetMetadataProvider(cloud.GetMetadataOpts().SearchOrder)
 
-	d.SetupDriver(cloud, mount, metadata)
+	// Initialize CryptMapper
+	cm := cryptmapper.New(cryptKms.NewConstellationKMS(kmsAddr))
+
+	d.SetupDriver(cloud, mount, metadata, cm)
 	d.Run()
 }

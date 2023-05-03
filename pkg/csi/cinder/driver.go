@@ -1,5 +1,9 @@
 /*
 Copyright 2017 The Kubernetes Authors.
+Copyright Edgeless Systems GmbH
+NOTE: This file is a modified version from the one of the cloud-provider-openstack project.
+Changes are needed to enable the use of dm-crypt.
+The original copyright notice is kept below.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,6 +23,8 @@ package cinder
 import (
 	"fmt"
 
+	"golang.org/x/net/context"
+
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -30,7 +36,7 @@ import (
 )
 
 const (
-	driverName  = "cinder.csi.openstack.org"
+	driverName  = "cinder.csi.confidential.cloud"
 	topologyKey = "topology." + driverName + "/zone"
 )
 
@@ -53,6 +59,13 @@ var (
 //revive:disable:exported
 type CinderDriver = Driver
 
+type cryptMapper interface {
+	CloseCryptDevice(volumeID string) error
+	OpenCryptDevice(ctx context.Context, source, volumeID string, integrity bool) (string, error)
+	ResizeCryptDevice(ctx context.Context, volumeID string) (string, error)
+	GetDevicePath(volumeID string) (string, error)
+}
+
 //revive:enable:exported
 
 type Driver struct {
@@ -60,10 +73,12 @@ type Driver struct {
 	fqVersion string //Fully qualified version in format {Version}@{CPO version}
 	endpoint  string
 	cluster   string
+	kmsAddr   string
 
 	ids *identityServer
 	cs  *controllerServer
 	ns  *nodeServer
+	cm  cryptMapper
 
 	vcap  []*csi.VolumeCapability_AccessMode
 	cscap []*csi.ControllerServiceCapability
@@ -166,11 +181,12 @@ func (d *Driver) GetVolumeCapabilityAccessModes() []*csi.VolumeCapability_Access
 	return d.vcap
 }
 
-func (d *Driver) SetupDriver(cloud openstack.IOpenStack, mount mount.IMount, metadata metadata.IMetadata) {
+func (d *Driver) SetupDriver(cloud openstack.IOpenStack, mount mount.IMount, metadata metadata.IMetadata, cm cryptMapper) {
 
 	d.ids = NewIdentityServer(d)
 	d.cs = NewControllerServer(d, cloud)
 	d.ns = NewNodeServer(d, mount, metadata, cloud)
+	d.cm = cm
 
 }
 
