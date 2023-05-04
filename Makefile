@@ -72,7 +72,7 @@ build-all-archs:
 build: $(BUILD_CMDS)
 
 $(BUILD_CMDS): $(SOURCES)
-	CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) GOPROXY=${GOPROXY} go build \
+	CGO_ENABLED=1 GOOS=$(GOOS) GOARCH=$(GOARCH) GOPROXY=${GOPROXY} go build \
 		-trimpath \
 		-ldflags $(LDFLAGS) \
 		-o $@ \
@@ -84,7 +84,7 @@ check: work
 	go run github.com/golangci/golangci-lint/cmd/golangci-lint@v1.51.2 run ./...
 
 unit: work
-	go test -tags=unit $(shell go list ./... | sed -e '/sanity/ { N; d; }' | sed -e '/tests/ {N; d;}') $(TESTARGS)
+	CGO_ENABLED=1 go test -tags=unit $(shell go list ./... | sed -e '/sanity/ { N; d; }' | sed -e '/tests/ {N; d;}') $(TESTARGS)
 
 functional:
 	@echo "$@ not yet implemented"
