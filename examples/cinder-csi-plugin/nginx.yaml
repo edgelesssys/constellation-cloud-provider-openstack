@@ -10,7 +10,7 @@ spec:
   resources:
     requests:
       storage: 1Gi
-  storageClassName: encrypted-rwo-delete
+  storageClassName: encrypted-rwo
 
 ---
 apiVersion: v1

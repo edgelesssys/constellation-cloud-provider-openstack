@@ -1,37 +1,107 @@
-# Cloud Provider OpenStack
+# OpenStack Cinder CSI driver for Constellation Kubernetes
 
-Thank you for visiting the `Cloud Provider OpenStack` repository!
+This is a fork of the OpenStack Cinder CSI driver with added encryption features for Constellation.
 
-This Repository hosts various plugins relevant to OpenStack and Kubernetes Integration
+- [Upstream source](https://github.com/kubernetes/cloud-provider-openstack)
+- [Constellation repo](https://github.com/edgelesssys/constellation)
 
-* [OpenStack Cloud Controller Manager](/docs/openstack-cloud-controller-manager/using-openstack-cloud-controller-manager.md/)
-* [Octavia Ingress Controller](/docs/octavia-ingress-controller/using-octavia-ingress-controller.md/)
-* [Cinder CSI Plugin](/docs/cinder-csi-plugin/using-cinder-csi-plugin.md/)
-* [Keystone Webhook Authentication Authorization](/docs/keystone-auth/using-keystone-webhook-authenticator-and-authorizer.md/)
-* [Client Keystone](/docs/keystone-auth/using-client-keystone-auth.md/)
-* [Manila CSI Plugin](/docs/manila-csi-plugin/using-manila-csi-plugin.md/)
-* [Barbican KMS Plugin](/docs/barbican-kms-plugin/using-barbican-kms-plugin.md/)
-* [Magnum Auto Healer](/docs/magnum-auto-healer/using-magnum-auto-healer.md/)
+## About
 
-**NOTE:**
+This driver allows a Constellation cluster to use [Cinder CSI](https://wiki.openstack.org/wiki/Cinder) volumes, csi plugin name: `cinder.csi.confidential.cloud`
 
-* Cinder Standalone Provisioner, Manila Provisioner and Cinder FlexVolume Driver were removed since release v1.18.0.
-* Version 1.17 was the last release of Manila Provisioner, which is unmaintained from now on. Due to dependency issues, we removed the code from master but it is still accessible in the [release-1.17](https://github.com/kubernetes/cloud-provider-openstack/tree/release-1.17) branch. Please consider migrating to Manila CSI Plugin.
-* Start from release v1.26.0, neutron lbaasv1 support is removed and only Octavia is supported.
+### Install the driver on a Constellation Kubernetes cluster
 
-## Developing
+Create a cloud configuration:
 
-Refer to [Getting Started Guide](/docs/developers-guide.md/) for setting up development environment and contributing.
+```shell
+cat <<EOF > cloud-config.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cinder-csi-cloud-config
+  namespace: kube-system
+type: Opaque
+stringData:
+  cloud.conf: |-
+      [Global]
+      auth-url=<auth-url>
+      username=<username>
+      password=<password>
+      project-id=<project-id>
+      project-name=<project-name>
+      user-domain-name=<user-domain>
+      project-domain-name=<project-domain>
+      region=<region>
+EOF
+kubectl apply -f cloud-config.yaml
+```
 
-## Contact
+Use `helm` to deploy the driver to your cluster:
 
-Please join us on [Kubernetes provider-openstack slack channel](https://kubernetes.slack.com/messages/provider-openstack)
+```shell
+helm install cinder-csi cloud-provider-openstack/charts/cinder-csi-plugin --namespace kube-system
+```
 
-Project Co-Leads:
-* @dulek - Michał Dulko
-* @jichenjc - Chen Ji
-* @kayrus
-* @zetaab - Jesse Haka
+See [helm configuration](./charts/cinder-csi-plugin/README.md) for a detailed list on configuration options.
+
+Remove the driver using helm:
+
+```shell
+helm uninstall cinder-csi -n kube-system
+```
+
+## Features
+
+- Please refer to [Cinder CSI Features](./docs/cinder-csi-plugin/features.md)
+
+### Enabling integrity protection
+
+By default the CSI driver will transparently encrypt all disks staged on the node.
+Optionally, you can configure the driver to also apply integrity protection.
+
+Please note that enabling integrity protection requires wiping the disk before use.
+Disk wipe speeds are largely dependent on IOPS and the performance tier of the disk.
+If you intend to provision large amounts of storage and Pod creation speed is important,
+we recommend requesting high-performance disks.
+
+To enable integrity protection, create a storage class with an explicit file system type request and add the suffix `-integrity`.
+The following is a storage class for integrity protected `ext4` formatted disks:
+
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: integrity-protected
+provisioner: azuredisk.csi.confidential.cloud
+parameters:
+  skuName: StandardSSD_LRS
+  csi.storage.k8s.io/fstype: ext4-integrity
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+```
+
+Please note that [volume expansion](https://kubernetes.io/blog/2018/07/12/resizing-persistent-volumes-using-kubernetes/) is not supported for integrity-protected disks.
+
+## Troubleshooting
+
+- [CSI driver troubleshooting guide](./docs/cinder-csi-plugin/troubleshooting.md)
+
+## Kubernetes Development
+
+- Please refer to [development guide](./docs/csi-dev.md)
+
+To build the driver container image:
+
+```shell
+driver_version=v0.0.0-test
+make REGISTRY=ghcr.io/edgelesssys/constellation VERSION=${driver_version} build-local-image-cinder-csi-plugin
+docker push ghcr.io/edgelesssys/constellation/cinder-csi-plugin:${driver_version}
+```
+
+## Links
+
+- [Kubernetes CSI Documentation](https://kubernetes-csi.github.io/docs/)
+- [Container Storage Interface (CSI) Specification](https://github.com/container-storage-interface/spec)
 
 ## License
 
