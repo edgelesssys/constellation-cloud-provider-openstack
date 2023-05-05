@@ -46,7 +46,7 @@ For sidecar version compatibility with kubernetes, please refer [Compatibility M
 
 ## Driver Deployment
 
-You can either use the manifests under `manifests/cinder-csi-plugin` or the Helm chart `charts/cinder-csi-plugin`.
+Use the the Helm chart `charts/cinder-csi-plugin` to deploy the driver.
 
 ### Command-line arguments
 
@@ -88,6 +88,13 @@ In addition to the standard set of klog flags, `cinder-csi-plugin` accepts the f
 
   This will be added as metadata to every Cinder volume created by this plugin.
   </dd>
+
+  <dt>--kms-addr &lt;KMS address&gt;</dt>
+  <dd>
+  This argument is required.
+
+  Address of Constellation's KMS. Used to request keys.
+  </dd>
 </dl>
 
 ## Driver Config
@@ -104,7 +111,7 @@ Implementation of `cinder-csi-plugin` relies on following OpenStack services.
 For Driver configuration, parameters must be passed via configuration file specified in `$CLOUD_CONFIG` environment variable.
 The following sections are supported in configuration file.
 
-### Global 
+### Global
 For Cinder CSI Plugin to authenticate with OpenStack Keystone, required parameters needs to be passed in `[Global]` section of the file. For all supported parameters, please refer [Global](../openstack-cloud-controller-manager/using-openstack-cloud-controller-manager.md#global) section.
 
 ### Block Storage
@@ -131,67 +138,6 @@ These configuration options pertain to metadata and should appear in the `[Metad
     service first if available, then the configuration drive.
 
   Influencing this behavior may be desirable as the metadata on the configuration drive may grow stale over time, whereas the metadata service always provides the most up to date view. Not all OpenStack clouds provide both configuration drive and metadata service though and only one or the other may be available which is why the default is to check both.
-
-### Using the manifests
-
-All the manifests required for the deployment of the plugin are found at ```manifests/cinder-csi-plugin```
-
-Configuration file specified in `$CLOUD_CONFIG` is passed to cinder CSI driver via kubernetes `secret`. If the secret `cloud-config` is already created in the cluster, you can remove the file, `manifests/cinder-csi-plugin/csi-secret-cinderplugin.yaml` and directly proceed to the step of creating controller and node plugins.
-
-To create a secret:
-
-* Encode your `$CLOUD_CONFIG` file content using base64.
-
-`$ base64 -w 0 $CLOUD_CONFIG`
-
-* Update ```cloud.conf``` configuration in ```manifests/cinder-csi-plugin/csi-secret-cinderplugin.yaml``` file
-by using the result of the above command.
-
-* Create the secret.
-
-``` $ kubectl create -f manifests/cinder-csi-plugin/csi-secret-cinderplugin.yaml```
-
-This should create a secret name `cloud-config` in `kube-system` namespace.
-
-Once the secret is created, Controller Plugin and Node Plugins can be deployed using respective manifests
-
-```$ kubectl -f manifests/cinder-csi-plugin/ apply```
-
-This creates a set of cluster roles, cluster role bindings, and statefulsets etc to communicate with openstack(cinder).
-For detailed list of created objects, explore the yaml files in the directory.
-You should make sure following similar pods are ready before proceed:
-
-```
-$ kubectl get pods -n kube-system
-NAME                                READY   STATUS    RESTARTS   AGE
-csi-cinder-controllerplugin         6/6     Running   0          29h
-csi-cinder-nodeplugin               3/3     Running   0          46h
-```
-
-To get information about CSI Drivers running in a cluster -
-
-```
-$ kubectl get csidrivers.storage.k8s.io
-NAME                       ATTACHREQUIRED   PODINFOONMOUNT   STORAGECAPACITY   TOKENREQUESTS   REQUIRESREPUBLISH   MODES                  AGE
-cinder.csi.openstack.org   true             true             false             <unset>         false               Persistent,Ephemeral   19h
-
-```
-
-> NOTE: If using certs(`ca-file`), make sure to add the additional mount to the manifests (controller and node plugin) to mount the location of certs as volume onto container. For example, add `ca-cert` in `/etc/cacert` folder. Uncomment the related sections in `manifests/cinder-csi-plugin/cinder-csi-controllerplugin.yaml` and `manifests/cinder-csi-plugin/cinder-csi-nodeplugin.yaml` and replace the path with your own.
-
-```
-       volumeMounts:
-          ....
-          - name: cacert
-              mountPath: /etc/cacert
-              readOnly: true
-
-     volumes:   
-        ....
-        - name: cacert
-          hostPath:
-            path: /etc/cacert
-```
 
 ### Using the Helm chart
 
@@ -244,7 +190,7 @@ helm install --namespace kube-system --name cinder-csi ./charts/cinder-csi-plugi
 | StorageClass `parameters`  | `availability`          | `nova`          | String. Volume Availability Zone |
 | StorageClass `parameters`  | `type`                  | Empty String    | String. Name/ID of Volume type. Corresponding volume type should exist in cinder     |
 | VolumeSnapshotClass `parameters` | `force-create`    | `false`         | Enable to support creating snapshot for a volume in in-use status |
-| Inline Volume `volumeAttributes`   | `capacity`              | `1Gi`       | volume size for creating inline volumes| 
+| Inline Volume `volumeAttributes`   | `capacity`              | `1Gi`       | volume size for creating inline volumes|
 | Inline Volume `VolumeAttributes`   | `type`              | Empty String  | Name/ID of Volume type. Corresponding volume type should exist in cinder |
 
 ## Local Development
@@ -256,14 +202,14 @@ To build the plugin, run
 ```
 $ export ARCH=amd64 # Defaults to amd64
 $ make build-cmd-cinder-csi-plugin
-``` 
+```
 
 To build cinder-csi-plugin image
 
 ```
 $ export ARCH=amd64 # Defaults to amd64
 $ make image-cinder-csi-plugin
-``` 
+```
 
 ### Testing
 
@@ -274,7 +220,7 @@ To run all unit tests:
 $ make test
 ```
 #### Sanity Tests
-Sanity tests ensures the CSI spec conformance of the driver. For more info, refer [Sanity check](https://github.com/kubernetes-csi/csi-test/tree/master/pkg/sanity) 
+Sanity tests ensures the CSI spec conformance of the driver. For more info, refer [Sanity check](https://github.com/kubernetes-csi/csi-test/tree/master/pkg/sanity)
 
 Run sanity tests for cinder CSI driver using:
 
@@ -288,5 +234,5 @@ Optionally, to test the driver csc tool could be used. please refer, [usage guid
 
 Starting from Kubernetes 1.21, OpenStack Cinder CSI migration is supported as beta feature and is `ON` by default. Cinder CSI driver must be installed on clusters on OpenStack for Cinder volumes to work. If you have persistence volumes that are created with in-tree `kubernetes.io/cinder` plugin, you could migrate to use `cinder.csi.openstack.org` Container Storage Interface (CSI) Driver.
 
-* The CSI Migration feature for Cinder, when enabled, shims all plugin operations from the existing in-tree plugin to the `cinder.csi.openstack.org` CSI Driver. 
+* The CSI Migration feature for Cinder, when enabled, shims all plugin operations from the existing in-tree plugin to the `cinder.csi.openstack.org` CSI Driver.
 * For more info, please refer [Migrate to CCM with CSI Migration](../openstack-cloud-controller-manager/migrate-to-ccm-with-csimigration.md#migrate-from-in-tree-cloud-provider-to-openstack-cloud-controller-manager-and-enable-csimigration) guide
