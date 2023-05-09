@@ -1,0 +1,61 @@
+--- sonobuoy.yaml.old	2023-05-09 08:24:09.470582428 +0000
++++ sonobuoy.yaml	2023-05-15 16:11:05.459165941 +0000
+@@ -64,6 +64,10 @@
+ data:
+   plugin-0.yaml: |-
+     podSpec:
++      volumes:
++      - name: csi-driver-config-volume
++        configMap:
++          name: csi-driver-test-config
+       containers: []
+       nodeSelector:
+         kubernetes.io/os: linux
+@@ -86,7 +90,7 @@
+       - /run_e2e.sh
+       env:
+       - name: E2E_EXTRA_ARGS
+-        value: --progress-report-url=http://localhost:8099/progress
++        value: --progress-report-url=http://localhost:8099/progress --storage.testdriver=/tmp/csi-cfg/driver.yaml
+       - name: E2E_FOCUS
+         value: External.Storage
+       - name: E2E_PARALLEL
+@@ -113,6 +117,8 @@
+       volumeMounts:
+       - mountPath: /tmp/sonobuoy/results
+         name: results
++      - mountPath: /tmp/csi-cfg
++        name: csi-driver-config-volume
+   plugin-1.yaml: |-
+     podSpec:
+       containers: []
+@@ -245,4 +251,28 @@
+     sonobuoy-component: aggregator
+   type: ClusterIP
+ ---
+-
++apiVersion: v1
++kind: ConfigMap
++metadata:
++  name: csi-driver-test-config
++  namespace: sonobuoy
++data:
++  driver.yaml: |
++    StorageClass:
++      FromName: true
++    DriverInfo:
++      Name: cinder.csi.confidential.cloud
++      SupportedFsType:
++        ext2: {}
++        ext3: {}
++        ext4: {}
++        xfs: {}
++      Capabilities:
++        persistence: true
++        block: true
++        exec: true
++        controllerExpansion: true
++        offlineExpansion: true
++        onlineExpansion: false
++        topology: true
++---
