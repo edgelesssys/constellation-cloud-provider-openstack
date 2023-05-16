@@ -47,8 +47,9 @@ RUN apk add --no-cache ca-certificates
 # We use go's native cross compilation for multi-arch in this stage, so the
 # builder itself is always amd64
 FROM --platform=linux/amd64 ${GOLANG_IMAGE} as builder
+RUN apt-get update && apt-get install -y build-essential git wget pkg-config libcryptsetup12 libcryptsetup-dev
 
-ARG GOPROXY=https://goproxy.io,direct
+ARG GOPROXY=direct
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION
@@ -109,7 +110,7 @@ CMD ["sh", "-c", "/bin/barbican-kms-plugin --socketpath ${socketpath} --cloud-co
 FROM --platform=${TARGETPLATFORM} ${DEBIAN_IMAGE} as cinder-csi-plugin
 
 # Install e4fsprogs for format
-RUN clean-install btrfs-progs e2fsprogs mount udev xfsprogs
+RUN clean-install btrfs-progs e2fsprogs mount udev xfsprogs libcryptsetup12 libcryptsetup-dev
 
 COPY --from=builder /build/cinder-csi-plugin /bin/cinder-csi-plugin
 COPY --from=certs /etc/ssl/certs /etc/ssl/certs
