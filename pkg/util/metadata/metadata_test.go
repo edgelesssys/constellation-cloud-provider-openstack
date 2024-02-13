@@ -18,6 +18,9 @@ package metadata
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -31,7 +34,7 @@ var FakeMetadata = Metadata{
 func TestParseMetadata(t *testing.T) {
 	_, err := parseMetadata(strings.NewReader("bogus"))
 	if err == nil {
-		t.Errorf("Should fail when bad data is provided: %s", err)
+		t.Errorf("Should fail when bad data is provided: %v", err)
 	}
 
 	data := strings.NewReader(`
@@ -71,7 +74,7 @@ func TestParseMetadata(t *testing.T) {
 `)
 	md, err := parseMetadata(data)
 	if err != nil {
-		t.Fatalf("Should succeed when provided with valid data: %s", err)
+		t.Fatalf("Should succeed when provided with valid data: %v", err)
 	}
 
 	if md.Name != "test" {
@@ -147,4 +150,28 @@ func TestCheckMetaDataOpts(t *testing.T) {
 				testcase.name, testcase.expectedError, err)
 		}
 	}
+}
+
+func TestGetFromMetadataService(t *testing.T) {
+	t.Run("ignores HTTP_PROXY", func(t *testing.T) {
+		// Here I spin up an HTTP server, set it as HTTP_PROXY, and
+		// assert that the request to the Metadata server doesn't hit
+		// it.
+		fakeProxy := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+			t.Errorf("the call to Metadata hit the proxy server")
+		}))
+		defer fakeProxy.Close()
+
+		// defer resetting HTTP_PROXY to whatever it was before this test
+		defer func(originalValue string, wasSet bool) {
+			if wasSet {
+				os.Setenv("HTTP_PROXY", originalValue)
+			} else {
+				os.Unsetenv("HTTP_PROXY")
+			}
+		}(os.LookupEnv("HTTP_PROXY"))
+
+		os.Setenv("HTTP_PROXY", fakeProxy.URL)
+		_, _ = getFromMetadataService("")
+	})
 }

@@ -21,7 +21,7 @@ This page shows how to create Services of LoadBalancer type in Kubernetes cluste
 
 A LoadBalancer type Service is a typical way to expose an application to the internet. It relies on the cloud provider to create an external load balancer with an IP address in the relevant network space. Any traffic that is then directed to this IP address is forwarded on to the application’s service.
 
-**NOTE: for test/PoC with only 1 master node environment, you need remove the label `node.kubernetes.io/exclude-from-external-load-balancers` of the master node otherwise the loadbalancer will not be created. search the label [here](https://pkg.go.dev/k8s.io/api/core/v1) for further information.**
+**NOTE: for test/PoC with only 1 master node environment, you need remove the label `node.kubernetes.io/exclude-from-external-load-balancers` of the master node otherwise the loadbalancer will not be created. Refer to [here](https://kubernetes.io/docs/reference/labels-annotations-taints/#node-kubernetes-io-exclude-from-external-load-balancers) for further information.**
 
 > Note: Different cloud providers may support different Service annotations and features.
 
@@ -33,7 +33,7 @@ Create an application of Deployment as the Service backend:
 kubectl run echoserver --image=gcr.io/google-containers/echoserver:1.10 --port=8080
 ```
 
-To provide the echoserver application with an internet-facing loadbalancer we can simply run the following:
+To provide the echoserver application with an internet-facing loadbalancer, we can simply run the following:
 
 ```shell
 cat <<EOF | kubectl apply -f -
@@ -53,7 +53,7 @@ spec:
 EOF
 ```
 
-Check the state the status of the loadbalanced-service until the `EXTERNAL-IP` status is no longer pending.
+Check the state and status of the loadbalanced-service until the `EXTERNAL-IP` status is no longer pending.
 
 ```shell
 $ kubectl get service loadbalanced-service
@@ -180,7 +180,7 @@ Request Body:
 
   Defines whether to create health monitor for the load balancer pool, if not specified, use `create-monitor` config. The health monitor can be created or deleted dynamically. A health monitor is required for services with `externalTrafficPolicy: Local`.
 
-  Not supported when `lb-provider=ovn` is configured in openstack-cloud-controller-manager.
+  NOTE: Health monitors for the `ovn` provider are only supported on OpenStack Wallaby and later.
 
 - `loadbalancer.openstack.org/health-monitor-delay`
 
@@ -192,7 +192,11 @@ Request Body:
 
 - `loadbalancer.openstack.org/health-monitor-max-retries`
 
-  Defines the health monitor retry count for the loadbalancer pools.
+  Defines the health monitor retry count for the loadbalancer pool members.
+
+- `loadbalancer.openstack.org/health-monitor-max-retries-down`
+
+  Defines the health monitor retry count for the loadbalancer pool members to be marked down.
 
 - `loadbalancer.openstack.org/flavor-id`
 
@@ -255,7 +259,8 @@ subnet-id="fa6a4e6c-6ae4-4dde-ae86-3e2f452c1f03"
 create-monitor=true
 monitor-delay=60s
 monitor-timeout=30s
-monitor-max-retries=5
+monitor-max-retries=1
+monitor-max-retries-down=3
 
 [LoadBalancerClass "internetFacing"]
 floating-network-id="c57af0a0-da92-49be-a98a-345ceca004b3"

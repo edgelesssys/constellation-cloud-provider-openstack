@@ -20,31 +20,23 @@ jobs:
       packages: write
     steps:
       - name: Check out repository
-        uses: actions/checkout@2541b1294d2704b0964813337f33b291d3f8596b
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
       - name: Install Go
-        uses: actions/setup-go@84cbf8094393cdc5fe1fe1671ff2647332956b1a
+        uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491
         with:
-          go-version: "1.18"
-
-      - name: Pseudo version
-        id: pseudo-version
-        run: |
-          git clone https://github.com/edgelesssys/constellation /constellation
-          cd /constellation/hack/pseudo-version
-          echo "pseudoVersion=$(go run .)" >> $GITHUB_ENV
-          echo ${{ env.pseudoVersion }}
+          go-version: "1.22.0"
 
       - name: Set up Docker Buildx
         id: docker-setup
-        uses: docker/setup-buildx-action@f211e3e9ded2d9377c8cadc4489a4e38014bc4c9
+        uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226
 
       - name: Build container image
-        run: make REGISTRY=ghcr.io/edgelesssys VERSION=${{ env.pseudoVersion }} image-csi-plugin
+        run: make REGISTRY=ghcr.io/edgelesssys/constellation VERSION=${{ inputs.versionTag }} build-local-image-cinder-csi-plugin
 
       - name: Log in to the Container registry
         id: docker-login
-        uses: docker/login-action@dd4fa0671be5250ee6f50aedf4cb05514abda2c7
+        uses: docker/login-action@343f7c4344506bcbf9b4de18042ae17996df046d
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -52,9 +44,4 @@ jobs:
 
       - name: Push container image
         run: |
-          docker push ghcr.io/edgelesssys/cinder-csi-plugin:${{ env.pseudoVersion }}
-          if [ "${{ inputs.versionTag }}" != "" ]
-          then
-            docker tag ghcr.io/edgelesssys/constellation/cinder-csi-plugin:${{ env.pseudoVersion }} ghcr.io/edgelesssys/constellation/cinder-csi-plugin:${{ inputs.versionTag }}
-            docker push ghcr.io/edgelesssys/constellation/cinder-csi-plugin:${{ inputs.versionTag }}
-          fi
+          docker push ghcr.io/edgelesssys/constellation/cinder-csi-plugin:${{ inputs.versionTag }}

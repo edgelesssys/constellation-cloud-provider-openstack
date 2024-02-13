@@ -16,6 +16,10 @@ shareProtocols:
  #     dir: /var/lib/kubelet/plugins/cephfs.csi.ceph.com
  #     sockFile: csi.sock
 
+# ImagePullSecret for all pods
+imagePullSecrets: []
+# - name: my-imagepull-secret
+
 extraLabels: {}
 # CSI Manila spec
 csimanila:
@@ -62,6 +66,11 @@ nodeplugin:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # Allow for specifying internal IP addresses for multiple hostnames
+  # hostAliases:
+  #   - ip: "10.0.0.1"
+  #     hostnames:
+  #     - "keystone.hostname.com"
   priorityClassName: ""
   # Use fullnameOverride to fully override the name of this component
   # fullnameOverride: some-other-name
@@ -92,12 +101,17 @@ controllerplugin:
   resizer:
     image:
       repository: registry.k8s.io/sig-storage/csi-resizer
-      tag: v1.3.0
+      tag: v1.8.0
       pullPolicy: IfNotPresent
     resources: {}
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # Allow for specifying internal IP addresses for multiple hostnames
+  # hostAliases:
+  #   - ip: "10.0.0.1"
+  #     hostnames:
+  #     - "keystone.hostname.com"
   # Use fullnameOverride to fully override the name of this component
   # fullnameOverride: some-other-name
 

@@ -32,7 +32,7 @@ The Cinder CSI Driver is a CSI Specification compliant driver used by Container 
 
 ## CSI Compatibility
 
-This plugin is compatible with CSI versions v1.3.0, v1.2.0 , v1.1.0, and v1.0.0
+This plugin is compatible with CSI v1.8.0
 
 ## Downloads
 
@@ -95,6 +95,15 @@ In addition to the standard set of klog flags, `cinder-csi-plugin` accepts the f
 
   Address of Constellation's KMS. Used to request keys.
   </dd>
+
+  <dt>--http-endpoint &lt;HTTP server&gt;</dt>
+  <dd>
+  This argument is optional.
+
+  The TCP network address where the HTTP server for providing metrics for diagnostics, will listen (example: `:8080`).
+
+  The default is empty string, which means the server is disabled.
+  </dd>  
 </dl>
 
 ## Driver Config

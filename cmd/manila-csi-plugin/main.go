@@ -17,34 +17,37 @@ limitations under the License.
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/csiclient"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/manilaclient"
-	"k8s.io/cloud-provider-openstack/pkg/csi/manila/options"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/runtimeconfig"
+	"k8s.io/cloud-provider-openstack/pkg/version"
 	"k8s.io/component-base/cli"
 	"k8s.io/klog/v2"
 )
 
 var (
-	endpoint              string
+	// Driver configuration
 	driverName            string
-	nodeID                string
-	nodeAZ                string
-	runtimeConfigFile     string
 	withTopology          bool
 	protoSelector         string
 	fwdEndpoint           string
-	userAgentData         []string
 	compatibilitySettings string
-	clusterID             string
+
+	// Node information
+	nodeID    string
+	nodeAZ    string
+	clusterID string
+
+	// Runtime options
+	endpoint          string
+	runtimeConfigFile string
+	userAgentData     []string
 )
 
 func validateShareProtocolSelector(v string) error {
@@ -60,75 +63,13 @@ func validateShareProtocolSelector(v string) error {
 	return fmt.Errorf("share protocol %q not supported; supported protocols are %v", v, supportedShareProtocols)
 }
 
-func parseCompatOpts() (*options.CompatibilityOptions, error) {
-	data := make(map[string]string)
-
-	if compatibilitySettings == "" {
-		return options.NewCompatibilityOptions(data)
-	}
-
-	knownCompatSettings := map[string]interface{}{}
-
-	isKnown := func(v string) bool {
-		_, ok := knownCompatSettings[v]
-		return ok
-	}
-
-	settings := strings.Split(compatibilitySettings, ",")
-	for _, elem := range settings {
-		setting := strings.SplitN(elem, "=", 2)
-
-		if len(setting) != 2 || setting[0] == "" || setting[1] == "" {
-			return nil, fmt.Errorf("invalid format in option %v, expected KEY=VALUE", setting)
-		}
-
-		if !isKnown(setting[0]) {
-			return nil, fmt.Errorf("unrecognized option '%s'", setting[0])
-		}
-
-		data[setting[0]] = setting[1]
-	}
-
-	return options.NewCompatibilityOptions(data)
-}
-
 func main() {
-	if err := flag.CommandLine.Parse([]string{}); err != nil {
-		klog.Fatalf("Unable to parse flags: %v", err)
-	}
-
 	cmd := &cobra.Command{
 		Use:   os.Args[0],
 		Short: "CSI Manila driver",
-		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			// Glog requires this otherwise it complains.
-			if err := flag.CommandLine.Parse(nil); err != nil {
-				return fmt.Errorf("unable to parse flags: %w", err)
-			}
-
-			// This is a temporary hack to enable proper logging until upstream dependencies
-			// are migrated to fully utilize klog instead of glog.
-			klogFlags := flag.NewFlagSet("klog", flag.ExitOnError)
-			klog.InitFlags(klogFlags)
-
-			// Sync the glog and klog flags.
-			cmd.Flags().VisitAll(func(f1 *pflag.Flag) {
-				f2 := klogFlags.Lookup(f1.Name)
-				if f2 != nil {
-					value := f1.Value.String()
-					_ = f2.Value.Set(value)
-				}
-			})
-			return nil
-		},
 		Run: func(cmd *cobra.Command, args []string) {
 			if err := validateShareProtocolSelector(protoSelector); err != nil {
 				klog.Fatalf(err.Error())
-			}
-
-			compatOpts, err := parseCompatOpts()
-			if err != nil {
-				klog.Fatalf("failed to parse compatibility settings: %v", err)
 			}
 
 			manilaClientBuilder := &manilaclient.ClientBuilder{UserAgent: "manila-csi-plugin", ExtraUserAgentData: userAgentData}
@@ -145,7 +86,6 @@ func main() {
 					FwdCSIEndpoint:      fwdEndpoint,
 					ManilaClientBuilder: manilaClientBuilder,
 					CSIClientBuilder:    csiClientBuilder,
-					CompatOpts:          compatOpts,
 					ClusterID:           clusterID,
 				},
 			)
@@ -158,9 +98,8 @@ func main() {
 
 			d.Run()
 		},
+		Version: version.Version,
 	}
-
-	cmd.Flags().AddGoFlagSet(flag.CommandLine)
 
 	cmd.PersistentFlags().StringVar(&endpoint, "endpoint", "unix://tmp/csi.sock", "CSI endpoint")
 

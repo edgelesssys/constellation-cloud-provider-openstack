@@ -36,7 +36,7 @@ VERSION         ?= $(shell git describe --dirty --tags --match='v*')
 GOARCH		:=
 GOFLAGS		:=
 TAGS		:=
-LDFLAGS		:= "-w -s -X 'k8s.io/component-base/version.gitVersion=$(VERSION)'"
+LDFLAGS		:= "-w -s -X 'k8s.io/component-base/version.gitVersion=$(VERSION)' -X 'k8s.io/cloud-provider-openstack/pkg/version.Version=$(VERSION)'"
 GOX_LDFLAGS	:= $(shell echo "$(LDFLAGS) -extldflags \"-static\"")
 REGISTRY	?= registry.k8s.io/provider-os
 IMAGE_OS	?= linux
@@ -81,7 +81,7 @@ $(BUILD_CMDS): $(SOURCES)
 test: unit functional
 
 check: work
-	go run github.com/golangci/golangci-lint/cmd/golangci-lint@v1.51.2 run ./...
+	go run github.com/golangci/golangci-lint/cmd/golangci-lint@v1.54.2 run ./...
 
 unit: work
 	CGO_ENABLED=1 go test -tags=unit $(shell go list ./... | sed -e '/sanity/ { N; d; }' | sed -e '/tests/ {N; d;}') $(TESTARGS)

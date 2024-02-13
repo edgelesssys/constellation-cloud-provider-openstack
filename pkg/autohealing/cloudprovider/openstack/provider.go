@@ -35,10 +35,12 @@ import (
 	"github.com/gophercloud/gophercloud/openstack/orchestration/v1/stacks"
 	"github.com/gophercloud/gophercloud/pagination"
 	uuid "github.com/pborman/uuid"
+	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/util/retry"
 	log "k8s.io/klog/v2"
 
 	"k8s.io/cloud-provider-openstack/pkg/autohealing/config"
@@ -208,12 +210,12 @@ func (provider CloudProvider) waitForServerDetachVolumes(serverID string, timeou
 		for _, attachment := range attachments {
 			volume, err := volumes.Get(provider.Cinder, attachment.VolumeID).Extract()
 			if err != nil {
-				return false, fmt.Errorf("failed to get volume %s, error: %s", attachment.VolumeID, err)
+				return false, fmt.Errorf("failed to get volume %s, error: %v", attachment.VolumeID, err)
 			}
 
 			bootable, err := strconv.ParseBool(volume.Bootable)
 			if err != nil {
-				log.Warningf("Unexpected value for bootable volume %s in volume %s, error %s", volume.Bootable, volume, err)
+				log.Warningf("Unexpected value for bootable volume %s in volume %v, error %v", volume.Bootable, *volume, err)
 			}
 
 			log.Infof("volume %s is bootable %t", attachment.VolumeID, bootable)
@@ -222,7 +224,7 @@ func (provider CloudProvider) waitForServerDetachVolumes(serverID string, timeou
 				log.Infof("detaching volume %s for instance %s", attachment.VolumeID, serverID)
 				err := volumeattach.Delete(provider.Nova, serverID, attachment.ID).ExtractErr()
 				if err != nil {
-					return false, fmt.Errorf("failed to detach volume %s from instance %s, error: %s", attachment.VolumeID, serverID, err)
+					return false, fmt.Errorf("failed to detach volume %s from instance %s, error: %v", attachment.VolumeID, serverID, err)
 				}
 			} else {
 				rootVolumeID = attachment.VolumeID
@@ -288,15 +290,36 @@ func (provider CloudProvider) firstTimeRepair(n healthcheck.NodeInfo, serverID s
 			// Uncordon the node
 			if n.IsWorker {
 				nodeName := n.KubeNode.Name
-				newNode := n.KubeNode.DeepCopy()
-				newNode.Spec.Unschedulable = false
-				if _, err := provider.KubeClient.CoreV1().Nodes().Update(context.TODO(), newNode, metav1.UpdateOptions{}); err != nil {
-					log.Errorf("Failed to cordon node %s, error: %v", nodeName, err)
-				} else {
-					log.Infof("Node %s is cordoned", nodeName)
+				// timeout for wait.Poll
+				ctx := context.Background()
+				errServiceUp := wait.PollUntilContextTimeout(ctx, 3*time.Second, provider.Config.RebuildDelayAfterReboot, false,
+					func(ctx context.Context) (bool, error) {
+						repairedNode, getErr := provider.KubeClient.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+						if getErr != nil {
+							log.Errorf("Failed to get node %s, error: %v", nodeName, getErr)
+							return false, getErr
+						}
+						if CheckNodeCondition(repairedNode, apiv1.NodeReady, apiv1.ConditionTrue) {
+							retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+								// Retrieve the latest version of Node before attempting update
+								// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
+								repairedNode.Spec.Unschedulable = false
+								if _, updateErr := provider.KubeClient.CoreV1().Nodes().Update(ctx, repairedNode, metav1.UpdateOptions{}); updateErr != nil {
+									log.Warningf("Failed to uncordon node %s, error: %v", nodeName, updateErr)
+									return updateErr
+								} else {
+									log.Infof("Node %s is uncordoned", nodeName)
+									return nil
+								}
+							})
+							return true, retryErr
+						}
+						return false, nil
+					})
+				if errServiceUp != nil {
+					log.Infof("Reboot doesn't repair Node %s error: %v", nodeName, errServiceUp)
 				}
 			}
-
 			n.RebootAt = time.Now()
 			firstTimeRebootNodes[serverID] = n
 			unHealthyNodes[serverID] = n
@@ -347,7 +370,7 @@ func (provider CloudProvider) Repair(nodes []healthcheck.NodeInfo) error {
 
 	err := provider.UpdateHealthStatus(masters, workers)
 	if err != nil {
-		return fmt.Errorf("failed to update the helath status of cluster %s, error: %v", clusterName, err)
+		return fmt.Errorf("failed to update the health status of cluster %s, error: %v", clusterName, err)
 	}
 
 	cluster, err := clusters.Get(provider.Magnum, clusterName).Extract()
@@ -604,7 +627,7 @@ func (provider CloudProvider) Enabled() bool {
 	}
 
 	if _, isPresent := cluster.Labels[ClusterAutoHealingLabel]; !isPresent {
-		log.Infof("Autohealing is disalbed for cluster %s", clusterName)
+		log.Infof("Autohealing is disabled for cluster %s", clusterName)
 		return false
 	}
 	autoHealingEnabled, err := strconv.ParseBool(cluster.Labels[ClusterAutoHealingLabel])
@@ -613,7 +636,7 @@ func (provider CloudProvider) Enabled() bool {
 		return false
 	}
 	if !autoHealingEnabled {
-		log.Infof("Autohealing is disalbed for cluster %s", clusterName)
+		log.Infof("Autohealing is disabled for cluster %s", clusterName)
 		return false
 	}
 
@@ -634,4 +657,17 @@ func (provider CloudProvider) Enabled() bool {
 	}
 
 	return true
+}
+
+// CheckNodeCondition check if a node's condition list contains the given condition type and status
+func CheckNodeCondition(node *apiv1.Node, conditionType apiv1.NodeConditionType, conditionStatus apiv1.ConditionStatus) bool {
+	if len(node.Status.Conditions) == 0 {
+		return false
+	}
+	for _, cond := range node.Status.Conditions {
+		if cond.Type == conditionType && cond.Status == conditionStatus {
+			return true
+		}
+	}
+	return false
 }
