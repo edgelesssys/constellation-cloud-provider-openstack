@@ -122,6 +122,11 @@ spec:
               mountPath: /etc/kubernetes/{{ .Values.secret.filename }}
               readOnly: true
               subPath: {{ .Values.secret.filename }}
+            # Edgeless specific mounts for cryptsetup
+            - name: sys
+              mountPath: /sys
+            - name: cryptsetup
+              mountPath: /run/cryptsetup
           {{- with .Values.csi.plugin.volumeMounts }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -138,6 +143,14 @@ spec:
         - name: kubelet-dir
           hostPath:
             path: {{ .Values.csi.plugin.nodePlugin.kubeletDir }}
+            type: Directory
+        - name: sys
+          hostPath:
+            path: /sys
+            type: Directory
+        - name: cryptsetup
+          hostPath:
+            path: /run/cryptsetup
             type: Directory
         # - name: pods-cloud-data
         #   hostPath:
