@@ -96,3 +96,21 @@ cp /bin/btrfs* ${DEST}/bin/
 copy_deps /bin/udevadm
 copy_deps /lib/udev/rules.d
 copy_deps /bin/findmnt
+
+# Edgeless cryptsetup deps
+cp /sbin/dmsetup ${DEST}/sbin/
+mkdir -p ${DEST}/lib/x86_64-linux-gnu/
+mkdir -p ${DEST}/usr/lib/x86_64-linux-gnu/
+cp -Lv /lib/x86_64-linux-gnu/libgcc_s.so.1 ${DEST}/lib/x86_64-linux-gnu/
+cp -Lv /lib/x86_64-linux-gnu/libcryptsetup.so* ${DEST}/lib/x86_64-linux-gnu/
+cp -Lv /lib/x86_64-linux-gnu/libdevmapper.so* ${DEST}/lib/x86_64-linux-gnu/
+cp -Lv /lib/x86_64-linux-gnu/libselinux.so* ${DEST}/lib/x86_64-linux-gnu/
+cp -Lv /lib/x86_64-linux-gnu/libm.so* ${DEST}/lib/x86_64-linux-gnu/
+cp -Lv /lib/x86_64-linux-gnu/libresolv.so* ${DEST}/lib/x86_64-linux-gnu/
+cp -Lv /usr/lib/x86_64-linux-gnu/libuuid.so* ${DEST}/usr/lib/x86_64-linux-gnu/
+cp -Lv /usr/lib/x86_64-linux-gnu/libcrypto.so* ${DEST}/usr/lib/x86_64-linux-gnu/
+cp -Lv /usr/lib/x86_64-linux-gnu/libargon2.so* ${DEST}/usr/lib/x86_64-linux-gnu/
+cp -Lv /usr/lib/x86_64-linux-gnu/libjson-c.so* ${DEST}/usr/lib/x86_64-linux-gnu/
+cp -Lv /usr/lib/x86_64-linux-gnu/libblkid.so* ${DEST}/usr/lib/x86_64-linux-gnu/
+cp -Lv /usr/lib/x86_64-linux-gnu/libudev.so* ${DEST}/usr/lib/x86_64-linux-gnu/
+cp -Lv /usr/lib/x86_64-linux-gnu/libpcre2-8.so* ${DEST}/usr/lib/x86_64-linux-gnu/

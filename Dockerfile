@@ -32,7 +32,7 @@
 ##                               BUILD ARGS                                   ##
 ################################################################################
 # This build arg allows the specification of a custom Golang image.
-ARG GOLANG_IMAGE=golang:1.21.5
+ARG GOLANG_IMAGE=golang:1.21.5-bullseye
 
 # The distroless image on which the CPI manager image is built.
 #
@@ -130,7 +130,7 @@ CMD ["sh", "-c", "/bin/barbican-kms-plugin --socketpath ${socketpath} --cloud-co
 # all magic happens in tools/csi-deps.sh
 FROM --platform=${TARGETPLATFORM} ${DEBIAN_IMAGE} as cinder-csi-plugin-utils
 
-RUN clean-install bash rsync mount udev btrfs-progs e2fsprogs xfsprogs util-linux libcryptsetup12 libcryptsetup-dev
+RUN clean-install bash rsync mount udev btrfs-progs e2fsprogs xfsprogs util-linux libcryptsetup12 libcryptsetup-dev libgcc-s1
 COPY tools/csi-deps.sh /tools/csi-deps.sh
 RUN /tools/csi-deps.sh
 
