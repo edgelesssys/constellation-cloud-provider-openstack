@@ -122,7 +122,7 @@ func NewResourceTracker(ingressName string, client *gophercloud.ServiceClient, l
 
 	logger := log.WithFields(log.Fields{"ingress": ingressName, "lbID": lbID})
 
-	var oldPoolIDs []string
+	oldPoolIDs := make([]string, 0, len(oldPoolMapping))
 	for _, poolID := range oldPoolMapping {
 		oldPoolIDs = append(oldPoolIDs, poolID)
 	}
@@ -181,7 +181,7 @@ func (rt *ResourceTracker) CreateResources() error {
 		rt.logger.WithFields(log.Fields{"poolName": pool.Name, "poolID": poolID}).Info("pool members updated ")
 	}
 
-	var curPoolIDs []string
+	curPoolIDs := make([]string, 0, len(poolMapping))
 	for _, id := range poolMapping {
 		curPoolIDs = append(curPoolIDs, id)
 	}
@@ -330,7 +330,7 @@ func (os *OpenStack) UpdateLoadBalancerDescription(lbID string, newDescription s
 }
 
 // EnsureListener creates a loadbalancer listener in octavia if it does not exist, wait for the loadbalancer to be ACTIVE.
-func (os *OpenStack) EnsureListener(name string, lbID string, secretRefs []string, listenerAllowedCIDRs []string) (*listeners.Listener, error) {
+func (os *OpenStack) EnsureListener(name string, lbID string, secretRefs []string, listenerAllowedCIDRs []string, timeoutClientData, timeoutMemberData, timeoutTCPInspect, timeoutMemberConnect *int) (*listeners.Listener, error) {
 	listener, err := openstackutil.GetListenerByName(os.Octavia, name, lbID)
 	if err != nil {
 		if err != cpoerrors.ErrNotFound {
@@ -340,10 +340,14 @@ func (os *OpenStack) EnsureListener(name string, lbID string, secretRefs []strin
 		log.WithFields(log.Fields{"lbID": lbID, "listenerName": name}).Info("creating listener")
 
 		opts := listeners.CreateOpts{
-			Name:           name,
-			Protocol:       "HTTP",
-			ProtocolPort:   80, // Ingress Controller only supports http/https for now
-			LoadbalancerID: lbID,
+			Name:                 name,
+			Protocol:             "HTTP",
+			ProtocolPort:         80, // Ingress Controller only supports http/https for now
+			LoadbalancerID:       lbID,
+			TimeoutClientData:    timeoutClientData,
+			TimeoutMemberData:    timeoutMemberData,
+			TimeoutMemberConnect: timeoutMemberConnect,
+			TimeoutTCPInspect:    timeoutTCPInspect,
 		}
 		if len(secretRefs) > 0 {
 			opts.DefaultTlsContainerRef = secretRefs[0]
@@ -363,7 +367,11 @@ func (os *OpenStack) EnsureListener(name string, lbID string, secretRefs []strin
 	} else {
 		if len(listenerAllowedCIDRs) > 0 && !reflect.DeepEqual(listener.AllowedCIDRs, listenerAllowedCIDRs) {
 			_, err := listeners.Update(os.Octavia, listener.ID, listeners.UpdateOpts{
-				AllowedCIDRs: &listenerAllowedCIDRs,
+				AllowedCIDRs:         &listenerAllowedCIDRs,
+				TimeoutClientData:    timeoutClientData,
+				TimeoutMemberData:    timeoutMemberData,
+				TimeoutMemberConnect: timeoutMemberConnect,
+				TimeoutTCPInspect:    timeoutTCPInspect,
 			}).Extract()
 			if err != nil {
 				return nil, fmt.Errorf("failed to update listener allowed CIDRs: %v", err)
@@ -447,6 +455,22 @@ func (os *OpenStack) EnsurePoolMembers(deleted bool, poolName string, lbID strin
 	_, err = os.waitLoadbalancerActiveProvisioningStatus(lbID)
 	if err != nil {
 		return nil, fmt.Errorf("error waiting for loadbalancer %s to be active: %v", lbID, err)
+	}
+
+	if os.config.Octavia.ProviderRequiresSerialAPICalls {
+		logger.Info("updating pool members using serial API calls")
+		// Serially update pool members
+		err = openstackutil.SeriallyReconcilePoolMembers(os.Octavia, pool, *nodePort, lbID, nodes)
+		if err != nil {
+			return nil, fmt.Errorf("error reconciling pool members for pool %s: %v", pool.ID, err)
+		}
+		_, err = os.waitLoadbalancerActiveProvisioningStatus(lbID)
+		if err != nil {
+			return nil, fmt.Errorf("error waiting for loadbalancer %s to be active: %v", lbID, err)
+		}
+		logger.Info("pool members updated")
+
+		return &pool.ID, nil
 	}
 
 	// Batch update pool members

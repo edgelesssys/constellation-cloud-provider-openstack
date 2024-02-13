@@ -96,11 +96,11 @@ func (os *OpenStack) ListVolumes(limit int, startingToken string) ([]volumes.Vol
 		}
 
 		if nextPageURL != "" {
-			queryParams, err := url.ParseQuery(nextPageURL)
+			pageURL, err := url.Parse(nextPageURL)
 			if err != nil {
 				return false, err
 			}
-			nextPageToken = queryParams.Get("marker")
+			nextPageToken = pageURL.Query().Get("marker")
 		}
 
 		return false, nil
@@ -206,7 +206,7 @@ func (os *OpenStack) AttachVolume(instanceID, volumeID string) (string, error) {
 	return volume.ID, nil
 }
 
-// WaitDiskAttached waits for attched
+// WaitDiskAttached waits for attached
 func (os *OpenStack) WaitDiskAttached(instanceID string, volumeID string) error {
 	backoff := wait.Backoff{
 		Duration: diskAttachInitDelay,
@@ -348,7 +348,7 @@ func (os *OpenStack) ExpandVolume(volumeID string, status string, newSize int) e
 
 	switch status {
 	case VolumeInUseStatus:
-		// If the user has disabled the use of microversion to be compatibale with
+		// If the user has disabled the use of microversion to be compatible with
 		// older clouds, we should fail early
 		if os.bsOpts.IgnoreVolumeMicroversion {
 			return fmt.Errorf("volume online resize is not available with ignore-volume-microversion, requires microversion 3.42 or newer")

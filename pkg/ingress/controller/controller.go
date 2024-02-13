@@ -90,7 +90,7 @@ const (
 	// https://github.com/kubernetes/cloud-provider/blob/25867882d509131a6fdeaf812ceebfd0f19015dd/controllers/service/controller.go#L673
 	LabelNodeExcludeLB = "node.kubernetes.io/exclude-from-external-load-balancers"
 
-	// DepcreatedLabelNodeRoleMaster specifies that a node is a master
+	// DeprecatedLabelNodeRoleMaster specifies that a node is a master
 	// It's copied over to kubeadm until it's merged in core: https://github.com/kubernetes/kubernetes/pull/39112
 	// Deprecated in favor of LabelNodeExcludeLB
 	DeprecatedLabelNodeRoleMaster = "node-role.kubernetes.io/master"
@@ -107,6 +107,26 @@ const (
 
 	// IngressControllerTag is added to the related resources.
 	IngressControllerTag = "octavia.ingress.kubernetes.io"
+
+	// IngressAnnotationTimeoutClientData is the timeout for frontend client inactivity.
+	// If not set, this value defaults to the Octavia configuration key `timeout_client_data`.
+	// Refer to https://docs.openstack.org/octavia/latest/configuration/configref.html#haproxy_amphora.timeout_client_data
+	IngressAnnotationTimeoutClientData = "octavia.ingress.kubernetes.io/timeout-client-data"
+
+	// IngressAnnotationTimeoutMemberData is the timeout for backend member inactivity.
+	// If not set, this value defaults to the Octavia configuration key `timeout_member_data`.
+	// Refer to https://docs.openstack.org/octavia/latest/configuration/configref.html#haproxy_amphora.timeout_member_data
+	IngressAnnotationTimeoutMemberData = "octavia.ingress.kubernetes.io/timeout-member-data"
+
+	// IngressAnnotationTimeoutMemberConnect is the timeout for backend member connection.
+	// If not set, this value defaults to the Octavia configuration key `timeout_member_connect`.
+	// Refer to https://docs.openstack.org/octavia/latest/configuration/configref.html#haproxy_amphora.timeout_member_connect
+	IngressAnnotationTimeoutMemberConnect = "octavia.ingress.kubernetes.io/timeout-member-connect"
+
+	// IngressAnnotationTimeoutTCPInspect is the time to wait for TCP packets for content inspection.
+	// If not set, this value defaults to the Octavia configuration key `timeout_tcp_inspect`.
+	// Refer to https://docs.openstack.org/octavia/latest/configuration/configref.html#haproxy_amphora.timeout_tcp_inspect
+	IngressAnnotationTimeoutTCPInspect = "octavia.ingress.kubernetes.io/timeout-tcp-inspect"
 
 	// IngressSecretCertName is certificate key name defined in the secret data.
 	IngressSecretCertName = "tls.crt"
@@ -558,16 +578,6 @@ func (c *Controller) deleteIngress(ing *nwv1.Ingress) error {
 	lbName := utils.GetResourceName(ing.Namespace, ing.Name, c.config.ClusterName)
 	logger := log.WithFields(log.Fields{"ingress": key})
 
-	// Delete Barbican secrets
-	if c.osClient.Barbican != nil && ing.Spec.TLS != nil {
-		nameFilter := fmt.Sprintf("kube_ingress_%s_%s_%s", c.config.ClusterName, ing.Namespace, ing.Name)
-		if err := openstackutil.DeleteSecrets(c.osClient.Barbican, nameFilter); err != nil {
-			return fmt.Errorf("failed to remove Barbican secrets: %v", err)
-		}
-
-		logger.Info("Barbican secrets deleted")
-	}
-
 	// If load balancer doesn't exist, assume it's already deleted.
 	loadbalancer, err := openstackutil.GetLoadbalancerByName(c.osClient.Octavia, lbName)
 	if err != nil {
@@ -618,9 +628,19 @@ func (c *Controller) deleteIngress(ing *nwv1.Ingress) error {
 
 	err = openstackutil.DeleteLoadbalancer(c.osClient.Octavia, loadbalancer.ID, true)
 	if err != nil {
-		logger.WithFields(log.Fields{"lbID": loadbalancer.ID}).Infof("loadbalancer delete failed: %s", err)
+		logger.WithFields(log.Fields{"lbID": loadbalancer.ID}).Infof("loadbalancer delete failed: %v", err)
 	} else {
 		logger.WithFields(log.Fields{"lbID": loadbalancer.ID}).Info("loadbalancer deleted")
+	}
+
+	// Delete Barbican secrets
+	if c.osClient.Barbican != nil && ing.Spec.TLS != nil {
+		nameFilter := fmt.Sprintf("kube_ingress_%s_%s_%s", c.config.ClusterName, ing.Namespace, ing.Name)
+		if err := openstackutil.DeleteSecrets(c.osClient.Barbican, nameFilter); err != nil {
+			return fmt.Errorf("failed to remove Barbican secrets: %v", err)
+		}
+
+		logger.Info("Barbican secrets deleted")
 	}
 
 	return err
@@ -728,8 +748,13 @@ func (c *Controller) ensureIngress(ing *nwv1.Ingress) error {
 
 	// Create listener
 	sourceRanges := getStringFromIngressAnnotation(ing, IngressAnnotationSourceRangesKey, "0.0.0.0/0")
+	timeoutClientData := maybeGetIntFromIngressAnnotation(ing, IngressAnnotationTimeoutClientData)
+	timeoutMemberConnect := maybeGetIntFromIngressAnnotation(ing, IngressAnnotationTimeoutMemberConnect)
+	timeoutMemberData := maybeGetIntFromIngressAnnotation(ing, IngressAnnotationTimeoutMemberData)
+	timeoutTCPInspect := maybeGetIntFromIngressAnnotation(ing, IngressAnnotationTimeoutTCPInspect)
+
 	listenerAllowedCIDRs := strings.Split(sourceRanges, ",")
-	listener, err := c.osClient.EnsureListener(resName, lb.ID, secretRefs, listenerAllowedCIDRs)
+	listener, err := c.osClient.EnsureListener(resName, lb.ID, secretRefs, listenerAllowedCIDRs, timeoutClientData, timeoutMemberData, timeoutTCPInspect, timeoutMemberConnect)
 	if err != nil {
 		return err
 	}
@@ -877,7 +902,7 @@ func (c *Controller) ensureIngress(ing *nwv1.Ingress) error {
 		}
 	}
 
-	// Reconsile octavia resources.
+	// Reconcile octavia resources.
 	rt := openstack.NewResourceTracker(ingfullName, c.osClient.Octavia, lb.ID, listener.ID, newPools, newPolicies, existingPools, oldPolicies)
 	if err := rt.CreateResources(); err != nil {
 		return err
@@ -1015,6 +1040,23 @@ func getStringFromIngressAnnotation(ingress *nwv1.Ingress, annotationKey string,
 	}
 
 	return defaultValue
+}
+
+// maybeGetIntFromIngressAnnotation searches a given Ingress for a specific annotationKey and either returns the
+// annotation's value
+func maybeGetIntFromIngressAnnotation(ingress *nwv1.Ingress, annotationKey string) *int {
+	klog.V(4).Infof("maybeGetIntFromIngressAnnotation(%s/%s, %v33)", ingress.Namespace, ingress.Name, annotationKey)
+	if annotationValue, ok := ingress.Annotations[annotationKey]; ok {
+		klog.V(4).Infof("Found a Service Annotation for key: %v", annotationKey)
+		returnValue, err := strconv.Atoi(annotationValue)
+		if err != nil {
+			klog.V(4).Infof("Invalid integer found on Service Annotation: %v = %v", annotationKey, annotationValue)
+			return nil
+		}
+		return &returnValue
+	}
+	klog.V(4).Infof("Could not find a Service Annotation; falling back to default setting for annotation %v", annotationKey)
+	return nil
 }
 
 // privateKeyFromPEM converts a PEM block into a crypto.PrivateKey.

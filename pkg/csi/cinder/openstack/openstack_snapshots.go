@@ -119,11 +119,11 @@ func (os *OpenStack) ListSnapshots(filters map[string]string) ([]snapshots.Snaps
 		}
 
 		if nextPageURL != "" {
-			queryParams, err := url.ParseQuery(nextPageURL)
+			pageURL, err := url.Parse(nextPageURL)
 			if err != nil {
 				return false, err
 			}
-			nextPageToken = queryParams.Get("marker")
+			nextPageToken = pageURL.Query().Get("marker")
 		}
 
 		return false, nil
@@ -173,7 +173,7 @@ func (os *OpenStack) WaitSnapshotReady(snapshotID string) error {
 	})
 
 	if wait.Interrupted(err) {
-		err = fmt.Errorf("Timeout, Snapshot  %s is still not Ready %v", snapshotID, err)
+		err = fmt.Errorf("timeout, Snapshot  %s is still not Ready %v", snapshotID, err)
 	}
 
 	return err

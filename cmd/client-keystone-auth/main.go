@@ -31,6 +31,7 @@ import (
 	"golang.org/x/term"
 
 	"k8s.io/cloud-provider-openstack/pkg/identity/keystone"
+	"k8s.io/cloud-provider-openstack/pkg/version"
 	kflag "k8s.io/component-base/cli/flag"
 	"k8s.io/klog/v2"
 )
@@ -137,24 +138,6 @@ func argumentsAreSet(url, user, project, password, domain, applicationCredential
 }
 
 func main() {
-	// Glog requires this otherwise it complains.
-	if err := flag.CommandLine.Parse(nil); err != nil {
-		klog.Fatalf("Unable to parse flags: %v", err)
-	}
-	// This is a temporary hack to enable proper logging until upstream dependencies
-	// are migrated to fully utilize klog instead of glog.
-	klogFlags := flag.NewFlagSet("klog", flag.ExitOnError)
-	klog.InitFlags(klogFlags)
-
-	// Sync the glog and klog flags.
-	flag.CommandLine.VisitAll(func(f1 *flag.Flag) {
-		f2 := klogFlags.Lookup(f1.Name)
-		if f2 != nil {
-			value := f1.Value.String()
-			_ = f2.Value.Set(value)
-		}
-	})
-
 	var url string
 	var domain string
 	var user string
@@ -168,6 +151,7 @@ func main() {
 	var applicationCredentialID string
 	var applicationCredentialName string
 	var applicationCredentialSecret string
+	var showVersion bool
 
 	pflag.StringVar(&url, "keystone-url", os.Getenv("OS_AUTH_URL"), "URL for the OpenStack Keystone API")
 	pflag.StringVar(&domain, "domain-name", os.Getenv("OS_DOMAIN_NAME"), "Keystone domain name")
@@ -180,18 +164,28 @@ func main() {
 	pflag.StringVar(&applicationCredentialID, "application-credential-id", os.Getenv("OS_APPLICATION_CREDENTIAL_ID"), "Application Credential ID")
 	pflag.StringVar(&applicationCredentialName, "application-credential-name", os.Getenv("OS_APPLICATION_CREDENTIAL_NAME"), "Application Credential Name")
 	pflag.StringVar(&applicationCredentialSecret, "application-credential-secret", os.Getenv("OS_APPLICATION_CREDENTIAL_SECRET"), "Application Credential Secret")
+	pflag.BoolVar(&showVersion, "version", false, "Show current version and exit")
 
 	logs.AddFlags(pflag.CommandLine)
+
+	klogFlags := flag.NewFlagSet("klog", flag.ExitOnError)
+	klog.InitFlags(klogFlags)
+	pflag.CommandLine.AddGoFlagSet(klogFlags)
+
+	kflag.InitFlags()
+
+	if showVersion {
+		fmt.Println(version.Version)
+		os.Exit(0)
+	}
+
 	logs.InitLogs()
 	defer logs.FlushLogs()
-
-	pflag.CommandLine.AddGoFlagSet(klogFlags)
-	kflag.InitFlags()
 
 	// Generate Gophercloud Auth Options based on input data from stdin
 	// if IsTerminal returns "true", or from env variables otherwise.
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		// If all requiered arguments are set use them
+		// If all required arguments are set use them
 		if argumentsAreSet(url, user, project, password, domain, applicationCredentialID, applicationCredentialName, applicationCredentialSecret) {
 			options.AuthOptions = gophercloud.AuthOptions{
 				IdentityEndpoint:            url,

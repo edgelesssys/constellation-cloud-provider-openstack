@@ -31,7 +31,7 @@ For more information about cloud-controller-manager, please see:
 - <https://kubernetes.io/docs/tasks/administer-cluster/running-cloud-controller/#running-cloud-controller-manager>
 - <https://kubernetes.io/docs/tasks/administer-cluster/developing-cloud-controller-manager/>
 
-**NOTE: Now, the openstack-cloud-controller-manager implementation is based on OpenStack Octavia, Neutron-LBaaS has been deprecated in OpenStack since Queens release and no longer maintained in openstack-cloud-controller-manager. So make sure to use Octavia if upgrade to the latest openstack-cloud-controller-manager docker image.**
+**NOTE: Now, the openstack-cloud-controller-manager implementation is based on OpenStack Octavia, Neutron-LBaaS has been removed in openstack-cloud-controller-manager since v1.26.0. So make sure to use Octavia if upgrade to the latest openstack-cloud-controller-manager docker image.**
 
 ## Deploy a Kubernetes cluster with openstack-cloud-controller-manager using kubeadm
 
@@ -59,7 +59,7 @@ The following guide has been tested to install Kubernetes v1.17 on Ubuntu 18.04.
     kubectl create secret -n kube-system generic cloud-config --from-file=cloud.conf
     ```
 
-- Create RBAC resources and openstack-cloud-controller-manager deamonset.
+- Create RBAC resources and openstack-cloud-controller-manager daemonset.
 
     ```shell
     kubectl apply -f https://raw.githubusercontent.com/kubernetes/cloud-provider-openstack/master/manifests/controller-manager/cloud-controller-manager-roles.yaml
@@ -85,7 +85,6 @@ Implementation of openstack-cloud-controller-manager relies on several OpenStack
 |--------------------------------|----------------|------------|----------|
 | Identity (Keystone)            | v3             | No         | Yes      |
 | Compute (Nova)                 | v2             | No         | Yes      |
-| Load Balancing (Neutron-LBaaS) | v1, v2         | Yes        | No       |
 | Load Balancing (Octavia)       | v2             | No         | Yes      |
 | Key Manager (Barbican)         | v1             | No         | No       |
 
@@ -174,14 +173,16 @@ The options in `Global` section are used for openstack-cloud-controller-manager 
   For example, this option can be useful when having multiple or dual-stack interfaces attached to a node and needing a user-controlled, deterministic way of sorting the addresses.
   Default: ""
 
-### Router
+### Route
 
 * `router-id`
-  Specifies the Neutron router ID to manage Kubernetes cluster routes, e.g. for load balancers or compute instances that are not part of the Kubernetes cluster.
+  Specifies the Neutron router ID to activate [route controller](https://kubernetes.io/docs/concepts/architecture/cloud-controller/#route-controller) to manage Kubernetes cluster routes.
+
+  **NOTE: This require openstack-cloud-controller-manager's `--cluster-cidr` flag to be set.**
 
 ###  Load Balancer
 
-Although the openstack-cloud-controller-manager was initially implemented with Neutron-LBaaS support, Octavia is recommended now because Neutron-LBaaS has been deprecated since Queens OpenStack release cycle and no longer accepted new feature enhancements. As a result, lots of advanced features in openstack-cloud-controller-manager rely on Octavia, even the CI is running based on Octavia enabled OpenStack environment. Functionalities are not guaranteed if using Neutron-LBaaS.
+Although the openstack-cloud-controller-manager was initially implemented with Neutron-LBaaS support, Octavia is mandatory now because Neutron-LBaaS has been deprecated since Queens OpenStack release cycle and no longer accepted new feature enhancements. As a result, since v1.26.0 the Neutron-LBaaS is not supported in openstack-cloud-controller-manager and removed from code repo.
 
 * `enabled`
   Whether or not to enable the LoadBalancer type of Services integration at all.
@@ -200,10 +201,17 @@ Although the openstack-cloud-controller-manager was initially implemented with N
   Optional. Tags for the external network subnet used to create floating IP for the load balancer VIP. Can be overridden by the Service annotation `loadbalancer.openstack.org/floating-subnet-tags`. If multiple subnets match the first one with still available IPs is used.
 
 * `lb-method`
-  The load balancing algorithm used to create the load balancer pool. The value can be `ROUND_ROBIN`, `LEAST_CONNECTIONS`, or `SOURCE_IP`. Default: `ROUND_ROBIN`
+  The load balancing algorithm used to create the load balancer pool.
+
+  If `lb-provider` is set to "amphora" or "octavia" the value can be one of:
+    * `ROUND_ROBIN` (default)
+    * `LEAST_CONNECTIONS`
+    * `SOURCE_IP`
+    
+  If `lb-provider` is set to "ovn" the value must be set to `SOURCE_IP_PORT`.
 
 * `lb-provider`
-  Optional. Used to specify the provider of the load balancer, e.g. "amphora" or "octavia". Only "amphora" or "octavia" provider are officially tested, other provider will cause a warning log.
+  Optional. Used to specify the provider of the load balancer, e.g. "amphora" (default), "octavia" (deprecated alias for "amphora"), or "ovn". Only the "amphora", "octavia", and "ovn" providers are officially tested, other providers will cause a warning log.
 
 * `lb-version`
   Optional. If specified, only "v2" is supported.
@@ -223,11 +231,16 @@ Although the openstack-cloud-controller-manager was initially implemented with N
 * `create-monitor`
   Indicates whether or not to create a health monitor for the service load balancer. A health monitor required for services that declare `externalTrafficPolicy: Local`. Default: false
 
+  NOTE: Health monitors for the `ovn` provider are only supported on OpenStack Wallaby and later.
+
 * `monitor-delay`
   The time, in seconds, between sending probes to members of the load balancer. Default: 5
 
 * `monitor-max-retries`
   The number of successful checks before changing the operating status of the load balancer member to ONLINE. A valid value is from 1 to 10. Default: 1
+
+* `monitor-max-retries-down`
+  The number of unsuccessful checks before changing the operating status of the load balancer member to ERROR. A valid value is from 1 to 10. Default: 3
 
 * `monitor-timeout`
   The maximum time, in seconds, that a monitor waits to connect backend before it times out. Default: 3
@@ -268,9 +281,9 @@ Although the openstack-cloud-controller-manager was initially implemented with N
   This option is currently a workaround for the issue https://github.com/kubernetes/ingress-nginx/issues/3996, should be removed or refactored after the Kubernetes [KEP-1860](https://github.com/kubernetes/enhancements/tree/master/keps/sig-network/1860-kube-proxy-IP-node-binding) is implemented.
 
 * `default-tls-container-ref`
-  Reference to a tls container. This option works with Octavia, when this option is set then the cloud provider will create an Octavia Listener of type TERMINATED_HTTPS for a TLS Terminated loadbalancer.
+  Reference to a tls container or secret. This option works with Octavia, when this option is set then the cloud provider will create an Octavia Listener of type TERMINATED_HTTPS for a TLS Terminated loadbalancer.
 
-  Format for tls container ref: `https://{keymanager_host}/v1/containers/{uuid}`
+  Accepted format for tls container ref are `https://{keymanager_host}/v1/containers/{uuid}` and `https://{keymanager_host}/v1/secrets/{uuid}`.
   Check `container-store` parameter if you want to disable validation.
 
 * `container-store`
@@ -282,9 +295,16 @@ Although the openstack-cloud-controller-manager was initially implemented with N
 * `max-shared-lb`
   The maximum number of Services that share a load balancer. Default: 2
 
+* `provider-requires-serial-api-calls`
+  Some Octavia providers do not support creating fully-populated loadbalancers using a single [API
+  call](https://docs.openstack.org/api-ref/load-balancer/v2/?expanded=create-a-load-balancer-detail#creating-a-fully-populated-load-balancer).
+  Setting this option to true will create loadbalancers using serial API calls which first create an unpopulated
+  loadbalancer, then populate its listeners, pools and members. This is a compatibility option at the expense of
+  increased load on the OpenStack API. Default: false 
+
 NOTE:
 
-* When using `ovn` provider service has limited scope - `create_monitor` is not supported and only supported `lb-method` is `SOURCE_IP`.
+* environment variable `OCCM_WAIT_LB_ACTIVE_STEPS` is used to provide steps of waiting loadbalancer to be ready. Current default wait steps is 23 and setup the environment variable overrides default value. Refer to [Backoff.Steps](https://pkg.go.dev/k8s.io/apimachinery/pkg/util/wait#Backoff) for further information.
 
 ### Metadata
 

@@ -117,6 +117,14 @@ spec:
     {{- if .Values.nodeplugin.tolerations }}
       tolerations: {{ toYaml .Values.nodeplugin.tolerations | nindent 8 }}
     {{- end }}
+    {{- with .Values.nodeplugin.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
     {{- if .Values.nodeplugin.priorityClassName }}
       priorityClassName: {{ .Values.nodeplugin.priorityClassName }}
+    {{- end }}
+    {{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
     {{- end }}

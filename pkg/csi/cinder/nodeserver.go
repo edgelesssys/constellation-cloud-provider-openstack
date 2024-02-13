@@ -86,6 +86,7 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 
 	ephemeralVolume := req.GetVolumeContext()["csi.storage.k8s.io/ephemeral"] == "true"
 	if ephemeralVolume {
+		// See https://github.com/kubernetes/cloud-provider-openstack/issues/1493
 		klog.Warningf("CSI inline ephemeral volumes support is deprecated in 1.24 release.")
 		return nodePublishEphemeral(ctx, req, ns)
 	}
@@ -99,7 +100,7 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		if cpoerrors.IsNotFound(err) {
 			return nil, status.Error(codes.NotFound, "Volume not found")
 		}
-		return nil, status.Error(codes.Internal, fmt.Sprintf("GetVolume failed with error %v", err))
+		return nil, status.Errorf(codes.Internal, "GetVolume failed with error %v", err)
 	}
 
 	mountOptions := []string{"bind"}
@@ -151,7 +152,7 @@ func nodePublishEphemeral(ctx context.Context, req *csi.NodePublishVolumeRequest
 
 	volAvailability, err := ns.Metadata.GetAvailabilityZone()
 	if err != nil {
-		return nil, status.Error(codes.Internal, fmt.Sprintf("retrieving availability zone from MetaData service failed with error %v", err))
+		return nil, status.Errorf(codes.Internal, "retrieving availability zone from MetaData service failed with error %v", err)
 	}
 
 	size = 1 // default size is 1GB
@@ -159,7 +160,7 @@ func nodePublishEphemeral(ctx context.Context, req *csi.NodePublishVolumeRequest
 		size, err = strconv.Atoi(strings.TrimSuffix(capacity, "Gi"))
 		if err != nil {
 			klog.V(3).Infof("Unable to parse capacity: %v", err)
-			return nil, status.Error(codes.Internal, fmt.Sprintf("Unable to parse capacity %v", err))
+			return nil, status.Errorf(codes.Internal, "Unable to parse capacity %v", err)
 		}
 	}
 
@@ -173,7 +174,7 @@ func nodePublishEphemeral(ctx context.Context, req *csi.NodePublishVolumeRequest
 
 	if err != nil {
 		klog.V(3).Infof("Failed to Create Ephemeral Volume: %v", err)
-		return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to create Ephemeral Volume %v", err))
+		return nil, status.Errorf(codes.Internal, "Failed to create Ephemeral Volume %v", err)
 	}
 
 	// Wait for volume status to be Available, before attaching
@@ -181,7 +182,7 @@ func nodePublishEphemeral(ctx context.Context, req *csi.NodePublishVolumeRequest
 		targetStatus := []string{openstack.VolumeAvailableStatus}
 		err := ns.Cloud.WaitVolumeTargetStatus(evol.ID, targetStatus)
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, err.Error())
+			return nil, status.Error(codes.Internal, err.Error())
 		}
 	}
 
@@ -198,7 +199,7 @@ func nodePublishEphemeral(ctx context.Context, req *csi.NodePublishVolumeRequest
 
 	_, err = ns.Cloud.AttachVolume(nodeID, evol.ID)
 	if err != nil {
-		msg := "nodePublishEphemeral: attach volume %s failed with error : %v"
+		msg := "nodePublishEphemeral: attach volume %s failed with error: %v"
 		klog.V(3).Infof(msg, evol.ID, err)
 		return nil, status.Errorf(codes.Internal, msg, evol.ID, err)
 	}
@@ -212,7 +213,7 @@ func nodePublishEphemeral(ctx context.Context, req *csi.NodePublishVolumeRequest
 
 	devicePath, err := getDevicePath(evol.ID, m)
 	if err != nil {
-		return nil, status.Error(codes.Internal, fmt.Sprintf("Unable to find Device path for volume: %v", err))
+		return nil, status.Errorf(codes.Internal, "Unable to find Device path for volume: %v", err)
 	}
 
 	targetPath := req.GetTargetPath()
@@ -308,7 +309,7 @@ func (ns *nodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 	if err != nil {
 
 		if !cpoerrors.IsNotFound(err) {
-			return nil, status.Error(codes.Internal, fmt.Sprintf("GetVolume failed with error %v", err))
+			return nil, status.Errorf(codes.Internal, "GetVolume failed with error %v", err)
 		}
 
 		// if not found by id, try to search by name
@@ -318,13 +319,13 @@ func (ns *nodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 
 		//if volume not found then GetVolumesByName returns empty list
 		if err != nil {
-			return nil, status.Error(codes.Internal, fmt.Sprintf("GetVolume failed with error %v", err))
+			return nil, status.Errorf(codes.Internal, "GetVolume failed with error %v", err)
 		}
 		if len(vols) > 0 {
 			vol = &vols[0]
 			ephemeralVolume = true
 		} else {
-			return nil, status.Error(codes.NotFound, fmt.Sprintf("Volume not found %s", volName))
+			return nil, status.Errorf(codes.NotFound, "Volume not found %s", volName)
 		}
 	}
 
@@ -348,7 +349,7 @@ func nodeUnpublishEphemeral(req *csi.NodeUnpublishVolumeRequest, ns *nodeServer,
 	if len(vol.Attachments) > 0 {
 		instanceID = vol.Attachments[0].ServerID
 	} else {
-		return nil, status.Error(codes.FailedPrecondition, "Volume attachement not found in request")
+		return nil, status.Error(codes.FailedPrecondition, "Volume attachment not found in request")
 	}
 
 	// [Edgeless] Unmap the crypt device so we can properly remove the device from the node
@@ -400,14 +401,14 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 		if cpoerrors.IsNotFound(err) {
 			return nil, status.Error(codes.NotFound, "Volume not found")
 		}
-		return nil, status.Error(codes.Internal, fmt.Sprintf("GetVolume failed with error %v", err))
+		return nil, status.Errorf(codes.Internal, "GetVolume failed with error %v", err)
 	}
 
 	m := ns.Mount
 	// Do not trust the path provided by cinder, get the real path on node
 	devicePath, err := getDevicePath(volumeID, m)
 	if err != nil {
-		return nil, status.Error(codes.Internal, fmt.Sprintf("Unable to find Device path for volume: %v", err))
+		return nil, status.Errorf(codes.Internal, "Unable to find Device path for volume: %v", err)
 	}
 
 	// Verify whether mounted
@@ -466,7 +467,7 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 		if needResize {
 			klog.V(4).Infof("NodeStageVolume: Resizing volume %q created from a snapshot/volume", volumeID)
 			if _, err := r.Resize(devicePath, stagingTarget); err != nil {
-				return nil, status.Errorf(codes.Internal, "Could not resize volume %q:  %v", volumeID, err)
+				return nil, status.Errorf(codes.Internal, "Could not resize volume %q: %v", volumeID, err)
 			}
 		}
 	}
@@ -493,7 +494,7 @@ func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 			klog.V(4).Infof("NodeUnstageVolume: Unable to find volume: %v", err)
 			return nil, status.Error(codes.NotFound, "Volume not found")
 		}
-		return nil, status.Error(codes.Internal, fmt.Sprintf("GetVolume failed with error %v", err))
+		return nil, status.Errorf(codes.Internal, "GetVolume failed with error %v", err)
 	}
 
 	err = ns.Mount.UnmountPath(stagingTargetPath)
@@ -513,12 +514,12 @@ func (ns *nodeServer) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoReque
 
 	nodeID, err := ns.Metadata.GetInstanceID()
 	if err != nil {
-		return nil, status.Error(codes.Internal, fmt.Sprintf("[NodeGetInfo] unable to retrieve instance id of node %v", err))
+		return nil, status.Errorf(codes.Internal, "[NodeGetInfo] unable to retrieve instance id of node %v", err)
 	}
 
 	zone, err := ns.Metadata.GetAvailabilityZone()
 	if err != nil {
-		return nil, status.Error(codes.Internal, fmt.Sprintf("[NodeGetInfo] Unable to retrieve availability zone of node %v", err))
+		return nil, status.Errorf(codes.Internal, "[NodeGetInfo] Unable to retrieve availability zone of node %v", err)
 	}
 	topology := &csi.Topology{Segments: map[string]string{topologyKey: zone}}
 
@@ -554,14 +555,14 @@ func (ns *nodeServer) NodeGetVolumeStats(_ context.Context, req *csi.NodeGetVolu
 
 	exists, err := utilpath.Exists(utilpath.CheckFollowSymlink, req.VolumePath)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to check whether volumePath exists: %s", err)
+		return nil, status.Errorf(codes.Internal, "failed to check whether volumePath exists: %v", err)
 	}
 	if !exists {
 		return nil, status.Errorf(codes.NotFound, "target: %s not found", volumePath)
 	}
 	stats, err := ns.Mount.GetDeviceStats(volumePath)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to get stats by path: %s", err)
+		return nil, status.Errorf(codes.Internal, "failed to get stats by path: %v", err)
 	}
 
 	if stats.Block {
@@ -598,9 +599,9 @@ func (ns *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
 	_, err := ns.Cloud.GetVolume(volumeID)
 	if err != nil {
 		if cpoerrors.IsNotFound(err) {
-			return nil, status.Error(codes.NotFound, fmt.Sprintf("Volume with ID %s not found", volumeID))
+			return nil, status.Errorf(codes.NotFound, "Volume with ID %s not found", volumeID)
 		}
-		return nil, status.Error(codes.Internal, fmt.Sprintf("NodeExpandVolume failed with error %v", err))
+		return nil, status.Errorf(codes.Internal, "NodeExpandVolume failed with error %v", err)
 	}
 
 	// [Edgeless] Resize LUKS partition
@@ -620,7 +621,7 @@ func (ns *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
 
 	r := mountutil.NewResizeFs(ns.Mount.Mounter().Exec)
 	if _, err := r.Resize(devicePath, volumePath); err != nil {
-		return nil, status.Errorf(codes.Internal, "Could not resize volume %q:  %v", volumeID, err)
+		return nil, status.Errorf(codes.Internal, "Could not resize volume %q: %v", volumeID, err)
 	}
 	return &csi.NodeExpandVolumeResponse{}, nil
 }

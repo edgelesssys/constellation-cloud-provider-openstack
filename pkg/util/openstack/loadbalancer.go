@@ -18,6 +18,8 @@ package openstack
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/gophercloud/gophercloud"
@@ -46,7 +48,7 @@ const (
 
 	waitLoadbalancerInitDelay   = 1 * time.Second
 	waitLoadbalancerFactor      = 1.2
-	waitLoadbalancerActiveSteps = 19
+	waitLoadbalancerActiveSteps = 23
 	waitLoadbalancerDeleteSteps = 12
 
 	activeStatus = "ACTIVE"
@@ -55,16 +57,6 @@ const (
 
 var (
 	octaviaVersion string
-
-	// ErrNotFound is used to inform that the object is missing.
-	// Deprecated: use cpoerrors.ErrNotFound instead.
-	// TODO: remove in v1.27.0.
-	ErrNotFound = cpoerrors.ErrNotFound
-
-	// ErrMultipleResults is used when we unexpectedly get back multiple results.
-	// Deprecated: use cpoerrors.ErrMultipleResults instead.
-	// TODO: remove in v1.27.0.
-	ErrMultipleResults = cpoerrors.ErrMultipleResults
 )
 
 // getOctaviaVersion returns the current Octavia API version.
@@ -159,13 +151,24 @@ func IsOctaviaFeatureSupported(client *gophercloud.ServiceClient, feature int, l
 	return false
 }
 
+func getTimeoutSteps(name string, steps int) int {
+	if v := os.Getenv(name); v != "" {
+		s, err := strconv.Atoi(v)
+		if err == nil && s >= 0 {
+			return s
+		}
+	}
+	return steps
+}
+
 // WaitActiveAndGetLoadBalancer wait for LB active then return the LB object for further usage
 func WaitActiveAndGetLoadBalancer(client *gophercloud.ServiceClient, loadbalancerID string) (*loadbalancers.LoadBalancer, error) {
 	klog.InfoS("Waiting for load balancer ACTIVE", "lbID", loadbalancerID)
+	steps := getTimeoutSteps("OCCM_WAIT_LB_ACTIVE_STEPS", waitLoadbalancerActiveSteps)
 	backoff := wait.Backoff{
 		Duration: waitLoadbalancerInitDelay,
 		Factor:   waitLoadbalancerFactor,
-		Steps:    waitLoadbalancerActiveSteps,
+		Steps:    steps,
 	}
 
 	var loadbalancer *loadbalancers.LoadBalancer
@@ -174,13 +177,14 @@ func WaitActiveAndGetLoadBalancer(client *gophercloud.ServiceClient, loadbalance
 		var err error
 		loadbalancer, err = loadbalancers.Get(client, loadbalancerID).Extract()
 		if mc.ObserveRequest(err) != nil {
-			return false, err
+			klog.Warningf("Failed to fetch loadbalancer status from OpenStack (lbID %q): %s", loadbalancerID, err)
+			return false, nil
 		}
 		if loadbalancer.ProvisioningStatus == activeStatus {
 			klog.InfoS("Load balancer ACTIVE", "lbID", loadbalancerID)
 			return true, nil
 		} else if loadbalancer.ProvisioningStatus == errorStatus {
-			return true, fmt.Errorf("loadbalancer has gone into ERROR state")
+			return true, fmt.Errorf("loadbalancer %s has gone into ERROR state", loadbalancerID)
 		} else {
 			return false, nil
 		}
@@ -501,7 +505,7 @@ func GetPoolByListener(client *gophercloud.ServiceClient, lbID, listenerID strin
 	return &listenerPools[0], nil
 }
 
-// GetPools retrives the pools belong to the loadbalancer.
+// GetPools retrieves the pools belong to the loadbalancer.
 func GetPools(client *gophercloud.ServiceClient, lbID string) ([]pools.Pool, error) {
 	var lbPools []pools.Pool
 
@@ -655,11 +659,15 @@ func CreateL7Rule(client *gophercloud.ServiceClient, policyID string, opts l7pol
 }
 
 // UpdateHealthMonitor updates a health monitor.
-func UpdateHealthMonitor(client *gophercloud.ServiceClient, monitorID string, opts monitors.UpdateOpts) error {
+func UpdateHealthMonitor(client *gophercloud.ServiceClient, monitorID string, opts monitors.UpdateOpts, lbID string) error {
 	mc := metrics.NewMetricContext("loadbalancer_healthmonitor", "update")
 	_, err := monitors.Update(client, monitorID, opts).Extract()
 	if mc.ObserveRequest(err) != nil {
 		return fmt.Errorf("failed to update healthmonitor: %v", err)
+	}
+
+	if _, err := WaitActiveAndGetLoadBalancer(client, lbID); err != nil {
+		return fmt.Errorf("failed to wait for load balancer %s ACTIVE after updating healthmonitor: %v", lbID, err)
 	}
 
 	return nil

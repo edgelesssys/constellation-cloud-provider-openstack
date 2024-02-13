@@ -27,6 +27,9 @@ import (
 	"github.com/gophercloud/gophercloud"
 	"github.com/gophercloud/gophercloud/openstack/compute/v2/extensions/availabilityzones"
 	"github.com/gophercloud/gophercloud/openstack/compute/v2/servers"
+	"github.com/gophercloud/gophercloud/openstack/networking/v2/extensions/portsecurity"
+	"github.com/gophercloud/gophercloud/openstack/networking/v2/extensions/trunk_details"
+	neutronports "github.com/gophercloud/gophercloud/openstack/networking/v2/ports"
 	"github.com/spf13/pflag"
 	gcfg "gopkg.in/gcfg.v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -34,8 +37,12 @@ import (
 	cloudprovider "k8s.io/cloud-provider"
 	"k8s.io/klog/v2"
 
+	"k8s.io/api/core/v1"
 	"k8s.io/client-go/informers"
 	coreinformers "k8s.io/client-go/informers/core/v1"
+	"k8s.io/client-go/kubernetes/scheme"
+	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/cloud-provider-openstack/pkg/client"
 	"k8s.io/cloud-provider-openstack/pkg/metrics"
 	"k8s.io/cloud-provider-openstack/pkg/util"
@@ -67,44 +74,55 @@ func AddExtraFlags(fs *pflag.FlagSet) {
 	fs.StringArrayVar(&userAgentData, "user-agent", nil, "Extra data to add to gophercloud user-agent. Use multiple times to add more than one component.")
 }
 
+type PortWithTrunkDetails struct {
+	neutronports.Port
+	trunk_details.TrunkDetailsExt
+}
+
+type PortWithPortSecurity struct {
+	neutronports.Port
+	portsecurity.PortSecurityExt
+}
+
 // LoadBalancer is used for creating and maintaining load balancers
 type LoadBalancer struct {
-	secret  *gophercloud.ServiceClient
-	network *gophercloud.ServiceClient
-	compute *gophercloud.ServiceClient
-	lb      *gophercloud.ServiceClient
-	opts    LoadBalancerOpts
-	kclient kubernetes.Interface
+	secret        *gophercloud.ServiceClient
+	network       *gophercloud.ServiceClient
+	lb            *gophercloud.ServiceClient
+	opts          LoadBalancerOpts
+	kclient       kubernetes.Interface
+	eventRecorder record.EventRecorder
 }
 
 // LoadBalancerOpts have the options to talk to Neutron LBaaSV2 or Octavia
 type LoadBalancerOpts struct {
-	Enabled               bool                `gcfg:"enabled"`              // if false, disables the controller
-	LBVersion             string              `gcfg:"lb-version"`           // overrides autodetection. Only support v2.
-	SubnetID              string              `gcfg:"subnet-id"`            // overrides autodetection.
-	MemberSubnetID        string              `gcfg:"member-subnet-id"`     // overrides autodetection.
-	NetworkID             string              `gcfg:"network-id"`           // If specified, will create virtual ip from a subnet in network which has available IP addresses
-	FloatingNetworkID     string              `gcfg:"floating-network-id"`  // If specified, will create floating ip for loadbalancer, or do not create floating ip.
-	FloatingSubnetID      string              `gcfg:"floating-subnet-id"`   // If specified, will create floating ip for loadbalancer in this particular floating pool subnetwork.
-	FloatingSubnet        string              `gcfg:"floating-subnet"`      // If specified, will create floating ip for loadbalancer in one of the matching floating pool subnetworks.
-	FloatingSubnetTags    string              `gcfg:"floating-subnet-tags"` // If specified, will create floating ip for loadbalancer in one of the matching floating pool subnetworks.
-	LBClasses             map[string]*LBClass // Predefined named Floating networks and subnets
-	LBMethod              string              `gcfg:"lb-method"` // default to ROUND_ROBIN.
-	LBProvider            string              `gcfg:"lb-provider"`
-	CreateMonitor         bool                `gcfg:"create-monitor"`
-	MonitorDelay          util.MyDuration     `gcfg:"monitor-delay"`
-	MonitorTimeout        util.MyDuration     `gcfg:"monitor-timeout"`
-	MonitorMaxRetries     uint                `gcfg:"monitor-max-retries"`
-	ManageSecurityGroups  bool                `gcfg:"manage-security-groups"`
-	NodeSecurityGroupIDs  []string            // Do not specify, get it automatically when enable manage-security-groups. TODO(FengyunPan): move it into cache
-	InternalLB            bool                `gcfg:"internal-lb"` // default false
-	CascadeDelete         bool                `gcfg:"cascade-delete"`
-	FlavorID              string              `gcfg:"flavor-id"`
-	AvailabilityZone      string              `gcfg:"availability-zone"`
-	EnableIngressHostname bool                `gcfg:"enable-ingress-hostname"` // Used with proxy protocol by adding a dns suffix to the load balancer IP address. Default false.
-	IngressHostnameSuffix string              `gcfg:"ingress-hostname-suffix"` // Used with proxy protocol by adding a dns suffix to the load balancer IP address. Default nip.io.
-	MaxSharedLB           int                 `gcfg:"max-shared-lb"`           //  Number of Services in maximum can share a single load balancer. Default 2
-	ContainerStore        string              `gcfg:"container-store"`         // Used to specify the store of the tls-container-ref
+	Enabled                        bool                `gcfg:"enabled"`              // if false, disables the controller
+	LBVersion                      string              `gcfg:"lb-version"`           // overrides autodetection. Only support v2.
+	SubnetID                       string              `gcfg:"subnet-id"`            // overrides autodetection.
+	MemberSubnetID                 string              `gcfg:"member-subnet-id"`     // overrides autodetection.
+	NetworkID                      string              `gcfg:"network-id"`           // If specified, will create virtual ip from a subnet in network which has available IP addresses
+	FloatingNetworkID              string              `gcfg:"floating-network-id"`  // If specified, will create floating ip for loadbalancer, or do not create floating ip.
+	FloatingSubnetID               string              `gcfg:"floating-subnet-id"`   // If specified, will create floating ip for loadbalancer in this particular floating pool subnetwork.
+	FloatingSubnet                 string              `gcfg:"floating-subnet"`      // If specified, will create floating ip for loadbalancer in one of the matching floating pool subnetworks.
+	FloatingSubnetTags             string              `gcfg:"floating-subnet-tags"` // If specified, will create floating ip for loadbalancer in one of the matching floating pool subnetworks.
+	LBClasses                      map[string]*LBClass // Predefined named Floating networks and subnets
+	LBMethod                       string              `gcfg:"lb-method"` // default to ROUND_ROBIN.
+	LBProvider                     string              `gcfg:"lb-provider"`
+	CreateMonitor                  bool                `gcfg:"create-monitor"`
+	MonitorDelay                   util.MyDuration     `gcfg:"monitor-delay"`
+	MonitorTimeout                 util.MyDuration     `gcfg:"monitor-timeout"`
+	MonitorMaxRetries              uint                `gcfg:"monitor-max-retries"`
+	MonitorMaxRetriesDown          uint                `gcfg:"monitor-max-retries-down"`
+	ManageSecurityGroups           bool                `gcfg:"manage-security-groups"`
+	InternalLB                     bool                `gcfg:"internal-lb"` // default false
+	CascadeDelete                  bool                `gcfg:"cascade-delete"`
+	FlavorID                       string              `gcfg:"flavor-id"`
+	AvailabilityZone               string              `gcfg:"availability-zone"`
+	EnableIngressHostname          bool                `gcfg:"enable-ingress-hostname"`            // Used with proxy protocol by adding a dns suffix to the load balancer IP address. Default false.
+	IngressHostnameSuffix          string              `gcfg:"ingress-hostname-suffix"`            // Used with proxy protocol by adding a dns suffix to the load balancer IP address. Default nip.io.
+	MaxSharedLB                    int                 `gcfg:"max-shared-lb"`                      //  Number of Services in maximum can share a single load balancer. Default 2
+	ContainerStore                 string              `gcfg:"container-store"`                    // Used to specify the store of the tls-container-ref
+	ProviderRequiresSerialAPICalls bool                `gcfg:"provider-requires-serial-api-calls"` // default false, the provider supports the "bulk update" API call
 	// revive:disable:var-naming
 	TlsContainerRef string `gcfg:"default-tls-container-ref"` //  reference to a tls container
 	// revive:enable:var-naming
@@ -153,6 +171,9 @@ type OpenStack struct {
 	useV1Instances        bool // TODO: v1 instance apis can be deleted after the v2 is verified enough
 	nodeInformer          coreinformers.NodeInformer
 	nodeInformerHasSynced func() bool
+
+	eventBroadcaster record.EventBroadcaster
+	eventRecorder    record.EventRecorder
 }
 
 // Config is used to read and store information from the cloud configuration file
@@ -186,6 +207,9 @@ func init() {
 func (os *OpenStack) Initialize(clientBuilder cloudprovider.ControllerClientBuilder, stop <-chan struct{}) {
 	clientset := clientBuilder.ClientOrDie("cloud-controller-manager")
 	os.kclient = clientset
+	os.eventBroadcaster = record.NewBroadcaster()
+	os.eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: os.kclient.CoreV1().Events("")})
+	os.eventRecorder = os.eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "cloud-provider-openstack"})
 }
 
 // ReadConfig reads values from the cloud.conf
@@ -205,12 +229,14 @@ func ReadConfig(config io.Reader) (Config, error) {
 	cfg.LoadBalancer.MonitorDelay = util.MyDuration{Duration: 5 * time.Second}
 	cfg.LoadBalancer.MonitorTimeout = util.MyDuration{Duration: 3 * time.Second}
 	cfg.LoadBalancer.MonitorMaxRetries = 1
+	cfg.LoadBalancer.MonitorMaxRetriesDown = 3
 	cfg.LoadBalancer.CascadeDelete = true
 	cfg.LoadBalancer.EnableIngressHostname = false
 	cfg.LoadBalancer.IngressHostnameSuffix = defaultProxyHostnameSuffix
 	cfg.LoadBalancer.TlsContainerRef = ""
 	cfg.LoadBalancer.ContainerStore = "barbican"
 	cfg.LoadBalancer.MaxSharedLB = 2
+	cfg.LoadBalancer.ProviderRequiresSerialAPICalls = false
 
 	err := gcfg.FatalOnly(gcfg.ReadInto(&cfg, config))
 	if err != nil {
@@ -336,12 +362,6 @@ func (os *OpenStack) LoadBalancer() (cloudprovider.LoadBalancer, bool) {
 		return nil, false
 	}
 
-	compute, err := client.NewComputeV2(os.provider, os.epOpts)
-	if err != nil {
-		klog.Errorf("Failed to create an OpenStack Compute client: %v", err)
-		return nil, false
-	}
-
 	lb, err := client.NewLoadBalancerV2(os.provider, os.epOpts)
 	if err != nil {
 		klog.Errorf("Failed to create an OpenStack LoadBalancer client: %v", err)
@@ -364,7 +384,7 @@ func (os *OpenStack) LoadBalancer() (cloudprovider.LoadBalancer, bool) {
 
 	klog.V(1).Info("Claiming to support LoadBalancer")
 
-	return &LbaasV2{LoadBalancer{secret, network, compute, lb, os.lbOpts, os.kclient}}, true
+	return &LbaasV2{LoadBalancer{secret, network, lb, os.lbOpts, os.kclient, os.eventRecorder}}, true
 }
 
 // Zones indicates that we support zones
@@ -463,7 +483,7 @@ func (os *OpenStack) Routes() (cloudprovider.Routes, bool) {
 		return nil, false
 	}
 
-	r, err := NewRoutes(os, network, netExts["extraroute-atomic"])
+	r, err := NewRoutes(os, network, netExts["extraroute-atomic"], netExts["allowed-address-pairs"])
 	if err != nil {
 		klog.Warningf("Error initialising Routes support: %v", err)
 		return nil, false

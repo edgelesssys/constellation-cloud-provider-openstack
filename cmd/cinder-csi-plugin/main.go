@@ -35,8 +35,6 @@ limitations under the License.
 package main
 
 import (
-	"flag"
-	"fmt"
 	"os"
 
 	"github.com/edgelesssys/constellation/v2/csi/cryptmapper"
@@ -47,6 +45,7 @@ import (
 	"k8s.io/cloud-provider-openstack/pkg/csi/cinder/openstack"
 	"k8s.io/cloud-provider-openstack/pkg/util/metadata"
 	"k8s.io/cloud-provider-openstack/pkg/util/mount"
+	"k8s.io/cloud-provider-openstack/pkg/version"
 	"k8s.io/component-base/cli"
 	"k8s.io/klog/v2"
 )
@@ -54,44 +53,20 @@ import (
 var (
 	endpoint     string
 	nodeID       string
-	cloudconfig  []string
+	cloudConfig  []string
 	cluster      string
 	httpEndpoint string
 	kmsAddr      string
 )
 
 func main() {
-	if err := flag.CommandLine.Parse([]string{}); err != nil {
-		klog.Fatalf("Unable to parse flags: %v", err)
-	}
-
 	cmd := &cobra.Command{
 		Use:   "Cinder",
 		Short: "CSI based Cinder driver",
-		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			// Glog requires this otherwise it complains.
-			if err := flag.CommandLine.Parse(nil); err != nil {
-				return fmt.Errorf("unable to parse flags: %w", err)
-			}
-
-			// This is a temporary hack to enable proper logging until upstream dependencies
-			// are migrated to fully utilize klog instead of glog.
-			klogFlags := flag.NewFlagSet("klog", flag.ExitOnError)
-			klog.InitFlags(klogFlags)
-
-			// Sync the glog and klog flags.
-			cmd.Flags().VisitAll(func(f1 *pflag.Flag) {
-				f2 := klogFlags.Lookup(f1.Name)
-				if f2 != nil {
-					value := f1.Value.String()
-					_ = f2.Value.Set(value)
-				}
-			})
-			return nil
-		},
 		Run: func(cmd *cobra.Command, args []string) {
 			handle()
 		},
+		Version: version.Version,
 	}
 
 	cmd.PersistentFlags().StringVar(&nodeID, "nodeid", "", "node id")
@@ -104,13 +79,13 @@ func main() {
 		klog.Fatalf("Unable to mark flag endpoint to be required: %v", err)
 	}
 
-	cmd.PersistentFlags().StringSliceVar(&cloudconfig, "cloud-config", nil, "CSI driver cloud config. This option can be given multiple times")
+	cmd.PersistentFlags().StringSliceVar(&cloudConfig, "cloud-config", nil, "CSI driver cloud config. This option can be given multiple times")
 	if err := cmd.MarkPersistentFlagRequired("cloud-config"); err != nil {
 		klog.Fatalf("Unable to mark flag cloud-config to be required: %v", err)
 	}
 
 	cmd.PersistentFlags().StringVar(&cluster, "cluster", "", "The identifier of the cluster that the plugin is running in.")
-	cmd.PersistentFlags().StringVar(&httpEndpoint, "http-endpoint", "", "The TCP network address where the HTTP server for diagnostics, including metrics and leader election health check, will listen (example: `:8080`). The default is empty string, which means the server is disabled.")
+	cmd.PersistentFlags().StringVar(&httpEndpoint, "http-endpoint", "", "The TCP network address where the HTTP server for providing metrics for diagnostics, including metrics and leader election health check, will listen (example: `:8080`). The default is empty string, which means the server is disabled.")
 
 	cmd.PersistentFlags().StringVar(&kmsAddr, "kms-addr", "kms.kube-system:9000", "Address of Constellation's KMS. Used to request keys (default: kms.kube-system:9000)")
 	if err := cmd.MarkPersistentFlagRequired("kms-addr"); err != nil {
@@ -124,26 +99,22 @@ func main() {
 }
 
 func handle() {
-
 	// Initialize cloud
 	d := cinder.NewDriver(endpoint, cluster)
-	openstack.InitOpenStackProvider(cloudconfig, httpEndpoint)
+	openstack.InitOpenStackProvider(cloudConfig, httpEndpoint)
 	cloud, err := openstack.GetOpenStackProvider()
 	if err != nil {
 		klog.Warningf("Failed to GetOpenStackProvider: %v", err)
 		return
 	}
-	//Initialize mount
+	// Initialize mount
 	mount := mount.GetMountProvider()
 
-	//Initialize Metadata
+	// Initialize Metadata
 	metadata := metadata.GetMetadataProvider(cloud.GetMetadataOpts().SearchOrder)
 
-	//Initialize CryptMapper
-	cm := cryptmapper.New(
-		cryptKms.NewConstellationKMS(kmsAddr),
-		&cryptmapper.CryptDevice{},
-	)
+	// Initialize CryptMapper
+	cm := cryptmapper.New(cryptKms.NewConstellationKMS(kmsAddr))
 
 	d.SetupDriver(cloud, mount, metadata, cm)
 	d.Run()

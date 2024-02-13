@@ -27,9 +27,9 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/cloud-provider-openstack/pkg/csi/manila/capabilities"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/options"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/shareadapters"
+	"k8s.io/cloud-provider-openstack/pkg/util"
 	clouderrors "k8s.io/cloud-provider-openstack/pkg/util/errors"
 	"k8s.io/klog/v2"
 )
@@ -54,7 +54,7 @@ var (
 	}
 )
 
-func getVolumeCreator(source *csi.VolumeContentSource, shareOpts *options.ControllerVolumeContext, compatOpts *options.CompatibilityOptions) (volumeCreator, error) {
+func getVolumeCreator(source *csi.VolumeContentSource) (volumeCreator, error) {
 	if source == nil {
 		return &blankVolume{}, nil
 	}
@@ -122,11 +122,6 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, status.Errorf(codes.Unauthenticated, "failed to create Manila v2 client: %v", err)
 	}
 
-	shareTypeCaps, err := capabilities.GetManilaCapabilities(shareOpts.Type, manilaClient)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to get Manila capabilities for share type %s: %v", shareOpts.Type, err)
-	}
-
 	requestedSize := req.GetCapacityRange().GetRequiredBytes()
 	if requestedSize == 0 {
 		// At least 1GiB
@@ -135,19 +130,36 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	sizeInGiB := bytesToGiB(requestedSize)
 
+	var accessibleTopology []*csi.Topology
+	accessibleTopologyReq := req.GetAccessibilityRequirements()
+	if cs.d.withTopology && accessibleTopologyReq != nil {
+		// All requisite/preferred topologies are considered valid. Nodes from those zones are required to be able to reach the storage.
+		// The operator is responsible for making sure that provided topology keys are valid and present on the nodes of the cluster.
+		accessibleTopology = accessibleTopologyReq.GetPreferred()
+
+		// When "autoTopology" is enabled and "availability" is empty, obtain the AZ from the target node.
+		if shareOpts.AvailabilityZone == "" && strings.EqualFold(shareOpts.AutoTopology, "true") {
+			shareOpts.AvailabilityZone = util.GetAZFromTopology(topologyKey, accessibleTopologyReq)
+			accessibleTopology = []*csi.Topology{{
+				Segments: map[string]string{topologyKey: shareOpts.AvailabilityZone},
+			}}
+		}
+	}
+
 	// Retrieve an existing share or create a new one
 
-	volCreator, err := getVolumeCreator(req.GetVolumeContentSource(), shareOpts, cs.d.compatOpts)
+	volCreator, err := getVolumeCreator(req.GetVolumeContentSource())
 	if err != nil {
 		return nil, err
 	}
 
-	share, err := volCreator.create(req, req.GetName(), sizeInGiB, manilaClient, shareOpts, shareMetadata)
+	share, err := volCreator.create(manilaClient, req, req.GetName(), sizeInGiB, shareOpts, shareMetadata)
 	if err != nil {
 		return nil, err
 	}
 
-	if err = verifyVolumeCompatibility(sizeInGiB, req, share, shareOpts, cs.d.compatOpts, shareTypeCaps); err != nil {
+	err = verifyVolumeCompatibility(sizeInGiB, req, share, shareOpts)
+	if err != nil {
 		return nil, status.Errorf(codes.AlreadyExists, "volume %s already exists, but is incompatible with the request: %v", req.GetName(), err)
 	}
 
@@ -162,13 +174,6 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		}
 
 		return nil, status.Errorf(codes.Internal, "failed to grant access to volume %s: %v", share.Name, err)
-	}
-
-	var accessibleTopology []*csi.Topology
-	if cs.d.withTopology {
-		// All requisite/preferred topologies are considered valid. Nodes from those zones are required to be able to reach the storage.
-		// The operator is responsible for making sure that provided topology keys are valid and present on the nodes of the cluster.
-		accessibleTopology = req.GetAccessibilityRequirements().GetPreferred()
 	}
 
 	volCtx := filterParametersForVolumeContext(params, options.NodeVolumeContextFields())
@@ -201,7 +206,7 @@ func (cs *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 		return nil, status.Errorf(codes.Unauthenticated, "failed to create Manila v2 client: %v", err)
 	}
 
-	if err := deleteShare(req.GetVolumeId(), manilaClient); err != nil {
+	if err := deleteShare(manilaClient, req.GetVolumeId()); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete volume %s: %v", req.GetVolumeId(), err)
 	}
 
@@ -260,7 +265,7 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 
 	// Retrieve an existing snapshot or create a new one
 
-	snapshot, err := getOrCreateSnapshot(req.GetName(), sourceShare.ID, manilaClient)
+	snapshot, err := getOrCreateSnapshot(manilaClient, req.GetName(), sourceShare.ID)
 	if err != nil {
 		if wait.Interrupted(err) {
 			return nil, status.Errorf(codes.DeadlineExceeded, "deadline exceeded while waiting for snapshot %s of volume %s to become available", snapshot.ID, req.GetSourceVolumeId())
@@ -288,11 +293,11 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 		readyToUse = true
 	case snapshotError:
 		// An error occurred, try to roll-back the snapshot
-		tryDeleteSnapshot(snapshot, manilaClient)
+		tryDeleteSnapshot(manilaClient, snapshot)
 
-		manilaErrMsg, err := lastResourceError(snapshot.ID, manilaClient)
+		manilaErrMsg, err := lastResourceError(manilaClient, snapshot.ID)
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "snapshot %s of volume %s is in error state, error description could not be retrieved: %v", snapshot.ID, req.GetSourceVolumeId(), err.Error())
+			return nil, status.Errorf(codes.Internal, "snapshot %s of volume %s is in error state, error description could not be retrieved: %v", snapshot.ID, req.GetSourceVolumeId(), err)
 		}
 
 		return nil, status.Errorf(manilaErrMsg.errCode.toRPCErrorCode(), "snapshot %s of volume %s is in error state: %s", snapshot.ID, req.GetSourceVolumeId(), manilaErrMsg.message)
@@ -333,7 +338,7 @@ func (cs *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteS
 		return nil, status.Errorf(codes.Unauthenticated, "failed to create Manila v2 client: %v", err)
 	}
 
-	if err := deleteSnapshot(req.GetSnapshotId(), manilaClient); err != nil {
+	if err := deleteSnapshot(manilaClient, req.GetSnapshotId()); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete snapshot %s: %v", req.GetSnapshotId(), err)
 	}
 
@@ -471,7 +476,7 @@ func (cs *controllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 		}, nil
 	}
 
-	share, err = extendShare(share.ID, desiredSizeInGiB, manilaClient)
+	share, err = extendShare(manilaClient, share.ID, desiredSizeInGiB)
 	if err != nil {
 		return nil, err
 	}

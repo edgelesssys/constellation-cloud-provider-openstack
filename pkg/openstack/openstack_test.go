@@ -27,8 +27,8 @@ import (
 	"time"
 
 	"github.com/gophercloud/gophercloud"
-	"github.com/gophercloud/gophercloud/openstack/compute/v2/extensions/attachinterfaces"
 	"github.com/gophercloud/gophercloud/openstack/compute/v2/servers"
+	neutronports "github.com/gophercloud/gophercloud/openstack/networking/v2/ports"
 	"github.com/spf13/pflag"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -83,7 +83,7 @@ func ConfigFromEnv() Config {
 func TestReadConfig(t *testing.T) {
 	_, err := ReadConfig(nil)
 	if err == nil {
-		t.Errorf("Should fail when no config is provided: %s", err)
+		t.Errorf("Should fail when no config is provided: %v", err)
 	}
 
 	cfg, err := ReadConfig(strings.NewReader(`
@@ -98,12 +98,13 @@ func TestReadConfig(t *testing.T) {
  create-monitor = yes
  monitor-delay = 1m
  monitor-timeout = 30s
- monitor-max-retries = 3
+ monitor-max-retries = 1
+ monitor-max-retries-down = 3
  [Metadata]
  search-order = configDrive, metadataService
  `))
 	if err != nil {
-		t.Fatalf("Should succeed when a valid config is provided: %s", err)
+		t.Fatalf("Should succeed when a valid config is provided: %v", err)
 	}
 	if cfg.Global.AuthURL != "http://auth.url" {
 		t.Errorf("incorrect authurl: %s", cfg.Global.AuthURL)
@@ -131,16 +132,19 @@ func TestReadConfig(t *testing.T) {
 	}
 
 	if !cfg.LoadBalancer.CreateMonitor {
-		t.Errorf("incorrect lb.createmonitor: %t", cfg.LoadBalancer.CreateMonitor)
+		t.Errorf("incorrect lb.create-monitor: %t", cfg.LoadBalancer.CreateMonitor)
 	}
 	if cfg.LoadBalancer.MonitorDelay.Duration != 1*time.Minute {
-		t.Errorf("incorrect lb.monitordelay: %s", cfg.LoadBalancer.MonitorDelay)
+		t.Errorf("incorrect lb.monitor-delay: %s", cfg.LoadBalancer.MonitorDelay)
 	}
 	if cfg.LoadBalancer.MonitorTimeout.Duration != 30*time.Second {
-		t.Errorf("incorrect lb.monitortimeout: %s", cfg.LoadBalancer.MonitorTimeout)
+		t.Errorf("incorrect lb.monitor-timeout: %s", cfg.LoadBalancer.MonitorTimeout)
 	}
-	if cfg.LoadBalancer.MonitorMaxRetries != 3 {
-		t.Errorf("incorrect lb.monitormaxretries: %d", cfg.LoadBalancer.MonitorMaxRetries)
+	if cfg.LoadBalancer.MonitorMaxRetries != 1 {
+		t.Errorf("incorrect lb.monitor-max-retries: %d", cfg.LoadBalancer.MonitorMaxRetries)
+	}
+	if cfg.LoadBalancer.MonitorMaxRetriesDown != 3 {
+		t.Errorf("incorrect lb.monitor-max-retries-down: %d", cfg.LoadBalancer.MonitorMaxRetriesDown)
 	}
 	if cfg.Metadata.SearchOrder != "configDrive, metadataService" {
 		t.Errorf("incorrect md.search-order: %v", cfg.Metadata.SearchOrder)
@@ -187,13 +191,14 @@ clouds:
  create-monitor = yes
  monitor-delay = 1m
  monitor-timeout = 30s
- monitor-max-retries = 3
+ monitor-max-retries = 1
+ monitor-max-retries-down = 3
  [Metadata]
  search-order = configDrive, metadataService
 `))
 
 	if err != nil {
-		t.Fatalf("Should succeed when a valid config is provided: %s", err)
+		t.Fatalf("Should succeed when a valid config is provided: %v", err)
 	}
 
 	// config has priority
@@ -227,7 +232,15 @@ clouds:
 
 	// Make non-global sections dont get overwritten
 	if !cfg.LoadBalancer.CreateMonitor {
-		t.Errorf("incorrect lb.createmonitor: %t", cfg.LoadBalancer.CreateMonitor)
+		t.Errorf("incorrect lb.create-monitor: %t", cfg.LoadBalancer.CreateMonitor)
+	}
+
+	if cfg.LoadBalancer.MonitorMaxRetries != 1 {
+		t.Errorf("incorrect lb.monitor-max-retries: %d", cfg.LoadBalancer.MonitorMaxRetries)
+	}
+
+	if cfg.LoadBalancer.MonitorMaxRetriesDown != 3 {
+		t.Errorf("incorrect lb.monitor-max-retries-down: %d", cfg.LoadBalancer.MonitorMaxRetriesDown)
 	}
 }
 
@@ -360,10 +373,10 @@ func TestNodeAddresses(t *testing.T) {
 		PublicNetworkName: []string{"public"},
 	}
 
-	interfaces := []attachinterfaces.Interface{
-		{
-			PortState: "ACTIVE",
-			FixedIPs: []attachinterfaces.FixedIP{
+	ports := []PortWithTrunkDetails{{
+		Port: neutronports.Port{
+			Status: "ACTIVE",
+			FixedIPs: []neutronports.IP{
 				{
 					IPAddress: "10.0.0.32",
 				},
@@ -372,9 +385,10 @@ func TestNodeAddresses(t *testing.T) {
 				},
 			},
 		},
+	},
 	}
 
-	addrs, err := nodeAddresses(&srv, interfaces, networkingOpts)
+	addrs, err := nodeAddresses(&srv, ports, nil, networkingOpts)
 	if err != nil {
 		t.Fatalf("nodeAddresses returned error: %v", err)
 	}
@@ -439,10 +453,10 @@ func TestNodeAddressesCustomPublicNetwork(t *testing.T) {
 		PublicNetworkName: []string{"pub-net"},
 	}
 
-	interfaces := []attachinterfaces.Interface{
-		{
-			PortState: "ACTIVE",
-			FixedIPs: []attachinterfaces.FixedIP{
+	ports := []PortWithTrunkDetails{{
+		Port: neutronports.Port{
+			Status: "ACTIVE",
+			FixedIPs: []neutronports.IP{
 				{
 					IPAddress: "10.0.0.32",
 				},
@@ -451,9 +465,10 @@ func TestNodeAddressesCustomPublicNetwork(t *testing.T) {
 				},
 			},
 		},
+	},
 	}
 
-	addrs, err := nodeAddresses(&srv, interfaces, networkingOpts)
+	addrs, err := nodeAddresses(&srv, ports, nil, networkingOpts)
 	if err != nil {
 		t.Fatalf("nodeAddresses returned error: %v", err)
 	}
@@ -512,10 +527,10 @@ func TestNodeAddressesCustomPublicNetworkWithIntersectingFixedIP(t *testing.T) {
 		PublicNetworkName: []string{"pub-net"},
 	}
 
-	interfaces := []attachinterfaces.Interface{
-		{
-			PortState: "ACTIVE",
-			FixedIPs: []attachinterfaces.FixedIP{
+	ports := []PortWithTrunkDetails{{
+		Port: neutronports.Port{
+			Status: "ACTIVE",
+			FixedIPs: []neutronports.IP{
 				{
 					IPAddress: "10.0.0.32",
 				},
@@ -528,9 +543,10 @@ func TestNodeAddressesCustomPublicNetworkWithIntersectingFixedIP(t *testing.T) {
 				},
 			},
 		},
+	},
 	}
 
-	addrs, err := nodeAddresses(&srv, interfaces, networkingOpts)
+	addrs, err := nodeAddresses(&srv, ports, nil, networkingOpts)
 	if err != nil {
 		t.Fatalf("nodeAddresses returned error: %v", err)
 	}
@@ -600,10 +616,10 @@ func TestNodeAddressesMultipleCustomInternalNetworks(t *testing.T) {
 		InternalNetworkName: []string{"private", "also-private"},
 	}
 
-	interfaces := []attachinterfaces.Interface{
-		{
-			PortState: "ACTIVE",
-			FixedIPs: []attachinterfaces.FixedIP{
+	ports := []PortWithTrunkDetails{{
+		Port: neutronports.Port{
+			Status: "ACTIVE",
+			FixedIPs: []neutronports.IP{
 				{
 					IPAddress: "10.0.0.32",
 				},
@@ -612,9 +628,10 @@ func TestNodeAddressesMultipleCustomInternalNetworks(t *testing.T) {
 				},
 			},
 		},
+	},
 	}
 
-	addrs, err := nodeAddresses(&srv, interfaces, networkingOpts)
+	addrs, err := nodeAddresses(&srv, ports, nil, networkingOpts)
 	if err != nil {
 		t.Fatalf("nodeAddresses returned error: %v", err)
 	}
@@ -684,10 +701,10 @@ func TestNodeAddressesOneInternalNetwork(t *testing.T) {
 		InternalNetworkName: []string{"also-private"},
 	}
 
-	interfaces := []attachinterfaces.Interface{
-		{
-			PortState: "ACTIVE",
-			FixedIPs: []attachinterfaces.FixedIP{
+	ports := []PortWithTrunkDetails{{
+		Port: neutronports.Port{
+			Status: "ACTIVE",
+			FixedIPs: []neutronports.IP{
 				{
 					IPAddress: "10.0.0.32",
 				},
@@ -696,9 +713,10 @@ func TestNodeAddressesOneInternalNetwork(t *testing.T) {
 				},
 			},
 		},
+	},
 	}
 
-	addrs, err := nodeAddresses(&srv, interfaces, networkingOpts)
+	addrs, err := nodeAddresses(&srv, ports, nil, networkingOpts)
 	if err != nil {
 		t.Fatalf("nodeAddresses returned error: %v", err)
 	}
@@ -760,10 +778,10 @@ func TestNodeAddressesIPv6Disabled(t *testing.T) {
 		IPv6SupportDisabled: true,
 	}
 
-	interfaces := []attachinterfaces.Interface{
-		{
-			PortState: "ACTIVE",
-			FixedIPs: []attachinterfaces.FixedIP{
+	ports := []PortWithTrunkDetails{{
+		Port: neutronports.Port{
+			Status: "ACTIVE",
+			FixedIPs: []neutronports.IP{
 				{
 					IPAddress: "10.0.0.32",
 				},
@@ -772,9 +790,10 @@ func TestNodeAddressesIPv6Disabled(t *testing.T) {
 				},
 			},
 		},
+	},
 	}
 
-	addrs, err := nodeAddresses(&srv, interfaces, networkingOpts)
+	addrs, err := nodeAddresses(&srv, ports, nil, networkingOpts)
 	if err != nil {
 		t.Fatalf("nodeAddresses returned error: %v", err)
 	}
@@ -841,10 +860,10 @@ func TestNodeAddressesWithAddressSortOrderOptions(t *testing.T) {
 		AddressSortOrder:  "10.0.0.0/8, 50.56.176.0/24, 2001:4800::/32",
 	}
 
-	interfaces := []attachinterfaces.Interface{
-		{
-			PortState: "ACTIVE",
-			FixedIPs: []attachinterfaces.FixedIP{
+	ports := []PortWithTrunkDetails{{
+		Port: neutronports.Port{
+			Status: "ACTIVE",
+			FixedIPs: []neutronports.IP{
 				{
 					IPAddress: "10.0.0.32",
 				},
@@ -853,9 +872,10 @@ func TestNodeAddressesWithAddressSortOrderOptions(t *testing.T) {
 				},
 			},
 		},
+	},
 	}
 
-	addrs, err := nodeAddresses(&srv, interfaces, networkingOpts)
+	addrs, err := nodeAddresses(&srv, ports, nil, networkingOpts)
 	if err != nil {
 		t.Fatalf("nodeAddresses returned error: %v", err)
 	}
@@ -884,7 +904,7 @@ func TestNewOpenStack(t *testing.T) {
 
 	_, err := NewOpenStack(cfg)
 	if err != nil {
-		t.Fatalf("Failed to construct/authenticate OpenStack: %s", err)
+		t.Fatalf("Failed to construct/authenticate OpenStack: %v", err)
 	}
 }
 
@@ -900,7 +920,7 @@ func TestLoadBalancer(t *testing.T) {
 
 		os, err := NewOpenStack(cfg)
 		if err != nil {
-			t.Fatalf("Failed to construct/authenticate OpenStack: %s", err)
+			t.Fatalf("Failed to construct/authenticate OpenStack: %v", err)
 		}
 
 		lb, ok := os.LoadBalancer()
@@ -910,7 +930,7 @@ func TestLoadBalancer(t *testing.T) {
 
 		_, exists, err := lb.GetLoadBalancer(context.TODO(), testClusterName, &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "noexist"}})
 		if err != nil {
-			t.Fatalf("GetLoadBalancer(\"noexist\") returned error: %s", err)
+			t.Fatalf("GetLoadBalancer(\"noexist\") returned error: %v", err)
 		}
 		if exists {
 			t.Fatalf("GetLoadBalancer(\"noexist\") returned exists")
@@ -945,7 +965,7 @@ func TestZones(t *testing.T) {
 
 	zone, err := z.GetZone(context.TODO())
 	if err != nil {
-		t.Fatalf("GetZone() returned error: %s", err)
+		t.Fatalf("GetZone() returned error: %v", err)
 	}
 
 	if zone.Region != "myRegion" {

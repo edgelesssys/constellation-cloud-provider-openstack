@@ -86,11 +86,11 @@ func CreateSecret(client *gophercloud.ServiceClient, name string, secretType str
 	return secret.SecretRef, nil
 }
 
-// ParseSecretID return secret ID from serectRef
+// ParseSecretID return secret ID from secretRef
 func ParseSecretID(ref string) (string, error) {
 	parts := strings.Split(ref, "/")
 	if len(parts) < 2 {
-		return "", fmt.Errorf("Could not parse %s", ref)
+		return "", fmt.Errorf("could not parse %s", ref)
 	}
 
 	return parts[len(parts)-1], nil
@@ -119,7 +119,7 @@ func DeleteSecrets(client *gophercloud.ServiceClient, partName string) error {
 			}
 			mc := metrics.NewMetricContext("secret", "delete")
 			err = secrets.Delete(client, secretID).ExtractErr()
-			if mc.ObserveRequest(err) != nil {
+			if mc.ObserveRequest(err) != nil && !cpoerrors.IsNotFound(err) {
 				return err
 			}
 		}
